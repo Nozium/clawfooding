@@ -18,52 +18,62 @@
         f: nixpkgs.lib.genAttrs systems (system: f nixpkgs.legacyPackages.${system});
     in
     {
-      packages = forAllSystems (pkgs: {
-        default = pkgs.buildNpmPackage {
-          pname = "clawfooding";
-          version = "0.1.0";
-          src = ./.;
-
+      packages = forAllSystems (pkgs:
+        let
           nodejs = pkgs.nodejs_22;
-          # TODO: Run `nix build` once — it will fail and print the correct hash.
-          #       Replace this placeholder with that sha256-... value.
-          npmDepsHash = pkgs.lib.fakeHash;
-          npmPackFlags = [ "--ignore-scripts" ];
+          pnpm = pkgs.pnpm_10;
+        in
+        {
+          default = pkgs.stdenv.mkDerivation (finalAttrs: {
+            pname = "clawfooding";
+            version = "0.1.0";
+            src = ./.;
 
-          # pnpm monorepo: root build triggers workspace builds via tsdown
-          buildPhase = ''
-            runHook preBuild
-            pnpm --filter clawfooding run build
-            runHook postBuild
-          '';
+            nativeBuildInputs = [
+              nodejs
+              pnpm
+              pnpm.configHook
+              pkgs.makeWrapper
+            ];
 
-          nativeBuildInputs = [ pkgs.makeWrapper ];
+            # TODO: Run `nix build` once — it will fail and print the correct hash.
+            #       Replace this placeholder with that sha256-... value.
+            pnpmDeps = pnpm.fetchDeps {
+              inherit (finalAttrs) pname version src;
+              hash = pkgs.lib.fakeHash;
+            };
 
-          installPhase = ''
-            runHook preInstall
+            buildPhase = ''
+              runHook preBuild
+              pnpm --filter clawfooding run build
+              runHook postBuild
+            '';
 
-            # Copy the self-contained bundle (index.mjs + split chunks)
-            mkdir -p $out/lib/clawfooding
-            cp apps/clawfooding/dist/*.mjs $out/lib/clawfooding/
+            installPhase = ''
+              runHook preInstall
 
-            # Copy persona and example data
-            cp -r personas $out/lib/clawfooding/personas
-            cp -r examples $out/lib/clawfooding/examples
+              # Copy the self-contained bundle (index.mjs + split chunks)
+              mkdir -p $out/lib/clawfooding
+              cp apps/clawfooding/dist/*.mjs $out/lib/clawfooding/
 
-            # Create wrapper that ensures node is on PATH
-            mkdir -p $out/bin
-            makeWrapper ${pkgs.nodejs_22}/bin/node $out/bin/clawfooding \
-              --add-flags "$out/lib/clawfooding/index.mjs"
+              # Copy persona and example data
+              cp -r personas $out/lib/clawfooding/personas
+              cp -r examples $out/lib/clawfooding/examples
 
-            runHook postInstall
-          '';
+              # Create wrapper that ensures node is on PATH
+              mkdir -p $out/bin
+              makeWrapper ${nodejs}/bin/node $out/bin/clawfooding \
+                --add-flags "$out/lib/clawfooding/index.mjs"
 
-          meta = {
-            description = "AI cognitive pattern testing CLI";
-            mainProgram = "clawfooding";
-          };
-        };
-      });
+              runHook postInstall
+            '';
+
+            meta = {
+              description = "AI cognitive pattern testing CLI";
+              mainProgram = "clawfooding";
+            };
+          });
+        });
 
       devShells = forAllSystems (pkgs: {
         default = pkgs.mkShellNoCC {
