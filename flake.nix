@@ -23,17 +23,45 @@
           pname = "clawfooding";
           version = "0.1.0";
           src = ./.;
-          npmDepsHash = "";
+
+          nodejs = pkgs.nodejs_22;
+          # TODO: Run `nix build` once — it will fail and print the correct hash.
+          #       Replace this placeholder with that sha256-... value.
+          npmDepsHash = pkgs.lib.fakeHash;
           npmPackFlags = [ "--ignore-scripts" ];
+
+          # pnpm monorepo: root build triggers workspace builds via tsdown
           buildPhase = ''
-            pnpm run build
+            runHook preBuild
+            pnpm --filter clawfooding run build
+            runHook postBuild
           '';
+
+          nativeBuildInputs = [ pkgs.makeWrapper ];
+
           installPhase = ''
+            runHook preInstall
+
+            # Copy the self-contained bundle (index.mjs + split chunks)
+            mkdir -p $out/lib/clawfooding
+            cp apps/clawfooding/dist/*.mjs $out/lib/clawfooding/
+
+            # Copy persona and example data
+            cp -r personas $out/lib/clawfooding/personas
+            cp -r examples $out/lib/clawfooding/examples
+
+            # Create wrapper that ensures node is on PATH
             mkdir -p $out/bin
-            cp -r apps/clawfooding/dist/* $out/
-            chmod +x $out/index.js
-            ln -s $out/index.js $out/bin/clawfooding
+            makeWrapper ${pkgs.nodejs_22}/bin/node $out/bin/clawfooding \
+              --add-flags "$out/lib/clawfooding/index.mjs"
+
+            runHook postInstall
           '';
+
+          meta = {
+            description = "AI cognitive pattern testing CLI";
+            mainProgram = "clawfooding";
+          };
         };
       });
 
