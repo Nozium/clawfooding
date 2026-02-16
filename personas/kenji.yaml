@@ -1,0 +1,32 @@
+name: "Kenji (急いでる人)"
+description: "45歳、マネージャー、時間がない。目標指向、高速判断、スキャニング。重要CTAの視認性、ステップ数過多、不要な確認ダイアログを検出。"
+
+demographics:
+  age: 45
+  tech_level: intermediate
+  device: "MacBook Pro 14 (1512x982)"
+  language: ja
+  accessibility: none
+
+cognitive_profile:
+  navigation_strategy: goal-directed
+  information_processing: parallel
+  risk_tolerance: high
+  error_recovery: retry
+  reading_pattern: scanning
+  working_memory_load: 5
+  attention_span: short
+  decision_speed: fast
+
+motor_profile:
+  pointer_precision: medium
+  click_speed_ms: 200
+  scroll_behavior: aggressive
+  tap_accuracy_offset_px: 3
+
+context:
+  motivation: task_completion
+  time_pressure: high
+  familiarity: returning
+  emotional_state: anxious
+  environment: desktop_office

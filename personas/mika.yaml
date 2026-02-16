@@ -1,0 +1,32 @@
+name: "Mika (アクセシビリティ)"
+description: "25歳、視覚障害、スクリーンリーダー使用。聴覚的情報処理、キーボードナビゲーション。aria-label不備、Tab順序の崩れ、画像alt欠損を検出。"
+
+demographics:
+  age: 25
+  tech_level: advanced
+  device: "MacBook Air M3 (1470x956)"
+  language: ja
+  accessibility: "screen_reader"
+
+cognitive_profile:
+  navigation_strategy: habitual
+  information_processing: serial
+  risk_tolerance: medium
+  error_recovery: explore_alternative
+  reading_pattern: linear
+  working_memory_load: 6
+  attention_span: medium
+  decision_speed: medium
+
+motor_profile:
+  pointer_precision: high
+  click_speed_ms: 100
+  scroll_behavior: minimal
+  tap_accuracy_offset_px: 0
+
+context:
+  motivation: task_completion
+  time_pressure: low
+  familiarity: returning
+  emotional_state: neutral
+  environment: desktop_office

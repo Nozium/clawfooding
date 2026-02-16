@@ -1,0 +1,32 @@
+name: "Chaos (エッジケース探索)"
+description: "パラメータをランダムに揺らす予測不能なペルソナ。想定外の入力、race condition、UIの壊れ方を検出。"
+
+demographics:
+  age: 30
+  tech_level: intermediate
+  device: "Random (320x568 - 2560x1440)"
+  language: ja
+  accessibility: none
+
+cognitive_profile:
+  navigation_strategy: exploratory
+  information_processing: parallel
+  risk_tolerance: high
+  error_recovery: explore_alternative
+  reading_pattern: scanning
+  working_memory_load: 9
+  attention_span: short
+  decision_speed: fast
+
+motor_profile:
+  pointer_precision: medium
+  click_speed_ms: 100
+  scroll_behavior: aggressive
+  tap_accuracy_offset_px: 15
+
+context:
+  motivation: exploration
+  time_pressure: none
+  familiarity: first_visit
+  emotional_state: neutral
+  environment: desktop_office

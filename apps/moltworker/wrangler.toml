@@ -1,0 +1,66 @@
+# ClawFooding Managed Service - MoltWorker Deployment
+# See: https://blog.cloudflare.com/moltworker-self-hosted-ai-agent/
+
+name = "clawfooding-managed"
+main = "src/index.ts"
+compatibility_date = "2025-12-01"
+compatibility_flags = ["nodejs_compat"]
+
+# ── Sandbox Container Configuration ─────────────────────────────────────
+# The container runs the ClawFooding agent runtime with OpenClaw
+[containers]
+max_instances = 5
+
+[[containers.instances]]
+name = "clawfooding-agent"
+class_name = "ClawFoodingAgent"
+max_instances = 5
+instance_type = "standard-1" # 1/2 vCPU, 4GB RAM, 8GB disk
+
+# ── R2 Storage for test reports and billing logs ────────────────────────
+[[r2_buckets]]
+binding = "REPORTS_BUCKET"
+bucket_name = "clawfooding-reports"
+
+[[r2_buckets]]
+binding = "BILLING_BUCKET"
+bucket_name = "clawfooding-billing"
+
+# ── D1 Database for operation logs ──────────────────────────────────────
+[[d1_databases]]
+binding = "DB"
+database_name = "clawfooding-logs"
+database_id = "" # Set after creation via: wrangler d1 create clawfooding-logs
+
+# ── AI Gateway for model routing ────────────────────────────────────────
+# Configure via secrets:
+#   wrangler secret put CLOUDFLARE_AI_GATEWAY_API_KEY
+#   wrangler secret put CF_AI_GATEWAY_ACCOUNT_ID
+#   wrangler secret put CF_AI_GATEWAY_GATEWAY_ID
+
+# ── Browser Rendering for agent browser automation ──────────────────────
+[browser]
+binding = "BROWSER"
+
+# ── KV Namespace for session state ──────────────────────────────────────
+[[kv_namespaces]]
+binding = "SESSION_KV"
+id = "" # Set after creation via: wrangler kv namespace create SESSION_KV
+
+# ── Environment Variables ───────────────────────────────────────────────
+[vars]
+ENVIRONMENT = "production"
+MAX_SESSION_DURATION = "600"
+DEFAULT_MODEL = "anthropic/claude-sonnet-4-5"
+
+# ── Secrets (set via `wrangler secret put <NAME>`) ──────────────────────
+# ANTHROPIC_API_KEY          - Direct Anthropic API access
+# CLOUDFLARE_AI_GATEWAY_API_KEY - AI Gateway API key
+# CF_AI_GATEWAY_ACCOUNT_ID   - AI Gateway account ID
+# CF_AI_GATEWAY_GATEWAY_ID   - AI Gateway gateway ID
+# CF_ACCESS_TEAM_DOMAIN      - Cloudflare Access team domain
+# CF_ACCESS_AUD              - Cloudflare Access audience tag
+# CLAWFOODING_API_KEY        - API key for external access
+# CDP_SECRET                 - Browser Rendering CDP auth secret
+# R2_ACCESS_KEY_ID           - R2 storage access
+# R2_SECRET_ACCESS_KEY       - R2 storage secret

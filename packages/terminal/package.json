@@ -1,0 +1,21 @@
+{
+	"name": "@clawfooding/terminal",
+	"version": "0.1.0",
+	"private": true,
+	"type": "module",
+	"exports": {
+		"./table": {
+			"types": "./src/table.ts",
+			"default": "./src/table.ts"
+		},
+		"./format": {
+			"types": "./src/format.ts",
+			"default": "./src/format.ts"
+		}
+	},
+	"devDependencies": {
+		"picocolors": "catalog:runtime",
+		"typescript": "catalog:build",
+		"@types/node": "catalog:types"
+	}
+}

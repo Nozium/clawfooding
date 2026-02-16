@@ -1,0 +1,35 @@
+{
+	"name": "@clawfooding/core",
+	"version": "0.1.0",
+	"private": true,
+	"type": "module",
+	"exports": {
+		"./persona": {
+			"types": "./src/persona.ts",
+			"default": "./src/persona.ts"
+		},
+		"./cognitive": {
+			"types": "./src/cognitive.ts",
+			"default": "./src/cognitive.ts"
+		},
+		"./security": {
+			"types": "./src/security.ts",
+			"default": "./src/security.ts"
+		},
+		"./billing": {
+			"types": "./src/billing.ts",
+			"default": "./src/billing.ts"
+		},
+		"./types": {
+			"types": "./src/_types.ts",
+			"default": "./src/_types.ts"
+		}
+	},
+	"devDependencies": {
+		"valibot": "catalog:runtime",
+		"yaml": "catalog:runtime",
+		"typescript": "catalog:build",
+		"vitest": "catalog:testing",
+		"@types/node": "catalog:types"
+	}
+}

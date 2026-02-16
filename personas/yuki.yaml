@@ -1,0 +1,32 @@
+name: "Yuki (パワーユーザー)"
+description: "28歳、エンジニア、毎日使う。習慣的ナビゲーション、並列処理、高リスク耐性。ショートカット不在、一括操作の不備、上級者向け効率化パスの欠如を検出。"
+
+demographics:
+  age: 28
+  tech_level: expert
+  device: "Desktop (2560x1440)"
+  language: ja
+  accessibility: none
+
+cognitive_profile:
+  navigation_strategy: habitual
+  information_processing: parallel
+  risk_tolerance: high
+  error_recovery: explore_alternative
+  reading_pattern: scanning
+  working_memory_load: 7
+  attention_span: long
+  decision_speed: fast
+
+motor_profile:
+  pointer_precision: high
+  click_speed_ms: 150
+  scroll_behavior: aggressive
+  tap_accuracy_offset_px: 2
+
+context:
+  motivation: exploration
+  time_pressure: none
+  familiarity: daily_user
+  emotional_state: calm
+  environment: desktop_office
