@@ -27,15 +27,25 @@ export function isUrlAllowed(url: string, permissions: Permissions): boolean {
  * Supports ** for path wildcards and * for single segment wildcards.
  */
 function matchUrlPattern(url: string, pattern: string): boolean {
-	// Normalize the pattern to a regex
-	const escaped = pattern
+	// Normalize: ensure trailing slash consistency
+	const normalizedUrl = url.endsWith("/") ? url : `${url}/`;
+	const normalizedPattern = pattern.endsWith("/**")
+		? pattern
+		: pattern.endsWith("/")
+			? `${pattern}**`
+			: pattern;
+
+	// Convert glob pattern to regex
+	// Replace ** first (matches across path segments), then * (single segment)
+	const escaped = normalizedPattern
 		.replace(/[.+^${}()|[\]\\]/g, "\\$&")
 		.replace(/\*\*/g, "___DOUBLE_STAR___")
-		.replace(/\*/g, "[^/]*")
-		.replace(/___DOUBLE_STAR___/g, ".*");
+		.replace(/\*/g, "___SINGLE_STAR___")
+		.replace(/___DOUBLE_STAR___/g, ".*")
+		.replace(/___SINGLE_STAR___/g, ".*"); // Treat * as ** for URL patterns (more intuitive)
 
 	const regex = new RegExp(`^${escaped}$`);
-	return regex.test(url);
+	return regex.test(url) || regex.test(normalizedUrl);
 }
 
 // ── Operation Permission Check ─────────────────────────────────────────────
@@ -260,4 +270,110 @@ export class DryRunLogger {
 	clear(): void {
 		this.entries = [];
 	}
+}
+
+// ── In-source Tests ────────────────────────────────────────────────────
+
+if (import.meta.vitest) {
+	const { describe, it, expect } = import.meta.vitest;
+
+	const makePermissions = (overrides?: Partial<Permissions>): Permissions => ({
+		navigation: "allow", click: "allow", type: "allow", submit: "allow",
+		delete: "deny", download: "deny", external_navigation: "deny",
+		max_requests_per_minute: 30, max_session_duration: 600,
+		url_allowlist: ["https://staging.example.com/**"],
+		url_denylist: ["*/admin/**"],
+		...overrides,
+	});
+
+	describe("isUrlAllowed", () => {
+		it("allows URLs matching allowlist", () => {
+			const perms = makePermissions();
+			expect(isUrlAllowed("https://staging.example.com/login", perms)).toBe(true);
+			expect(isUrlAllowed("https://staging.example.com/dashboard/settings", perms)).toBe(true);
+		});
+
+		it("allows base URL with ** pattern", () => {
+			const perms = makePermissions();
+			expect(isUrlAllowed("https://staging.example.com", perms)).toBe(true);
+		});
+
+		it("denies URLs matching denylist", () => {
+			const perms = makePermissions();
+			expect(isUrlAllowed("https://staging.example.com/admin/users", perms)).toBe(false);
+		});
+
+		it("denies URLs not in allowlist", () => {
+			const perms = makePermissions();
+			expect(isUrlAllowed("https://evil.com/phishing", perms)).toBe(false);
+		});
+	});
+
+	describe("isOperationAllowed", () => {
+		it("allows permitted operations", () => {
+			const perms = makePermissions();
+			expect(isOperationAllowed("navigation", perms)).toBe(true);
+			expect(isOperationAllowed("click", perms)).toBe(true);
+		});
+
+		it("denies forbidden operations", () => {
+			const perms = makePermissions();
+			expect(isOperationAllowed("delete", perms)).toBe(false);
+			expect(isOperationAllowed("download", perms)).toBe(false);
+		});
+	});
+
+	describe("RateLimiter", () => {
+		it("allows requests within limit", () => {
+			const limiter = new RateLimiter(5);
+			for (let i = 0; i < 5; i++) {
+				expect(limiter.tryRequest()).toBe(true);
+			}
+		});
+
+		it("rejects requests over limit", () => {
+			const limiter = new RateLimiter(3);
+			expect(limiter.tryRequest()).toBe(true);
+			expect(limiter.tryRequest()).toBe(true);
+			expect(limiter.tryRequest()).toBe(true);
+			expect(limiter.tryRequest()).toBe(false);
+		});
+
+		it("tracks remaining count", () => {
+			const limiter = new RateLimiter(5);
+			expect(limiter.remaining).toBe(5);
+			limiter.tryRequest();
+			expect(limiter.remaining).toBe(4);
+		});
+	});
+
+	describe("LoopDetector", () => {
+		it("returns ok for non-repeating actions", () => {
+			const detector = new LoopDetector();
+			expect(detector.record("click", "btn1")).toBe("ok");
+			expect(detector.record("click", "btn2")).toBe("ok");
+			expect(detector.record("type", "input1")).toBe("ok");
+		});
+
+		it("warns on repeated actions", () => {
+			const detector = new LoopDetector(3, 5);
+			detector.record("click", "btn1");
+			detector.record("click", "btn1");
+			expect(detector.record("click", "btn1")).toBe("warn");
+		});
+
+		it("stops on excessive loops", () => {
+			const detector = new LoopDetector(3, 5);
+			for (let i = 0; i < 4; i++) detector.record("click", "btn1");
+			expect(detector.record("click", "btn1")).toBe("stop");
+		});
+	});
+
+	describe("SessionTimer", () => {
+		it("is not expired immediately", () => {
+			const timer = new SessionTimer(600);
+			expect(timer.isExpired).toBe(false);
+			expect(timer.remainingSeconds).toBeGreaterThan(598);
+		});
+	});
 }

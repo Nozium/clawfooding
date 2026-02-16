@@ -287,3 +287,114 @@ export class BillingTracker {
 		this.records = [];
 	}
 }
+
+// ── In-source Tests ────────────────────────────────────────────────────
+
+if (import.meta.vitest) {
+	const { describe, it, expect } = import.meta.vitest;
+
+	describe("calculateCost", () => {
+		it("calculates Sonnet 4.5 cost correctly", () => {
+			const cost = calculateCost("anthropic/claude-sonnet-4-5", {
+				inputTokens: 1_000_000,
+				outputTokens: 0,
+				cacheCreationInputTokens: 0,
+				cacheReadInputTokens: 0,
+			});
+			expect(cost).toBeCloseTo(3.0, 1); // $3/M input tokens
+		});
+
+		it("returns 0 for unknown models", () => {
+			const cost = calculateCost("unknown/model", {
+				inputTokens: 1000, outputTokens: 500,
+				cacheCreationInputTokens: 0, cacheReadInputTokens: 0,
+			});
+			expect(cost).toBe(0);
+		});
+	});
+
+	describe("BillingTracker", () => {
+		it("records and retrieves per-persona billing", () => {
+			const tracker = new BillingTracker();
+			const pid = "haruka" as PersonaId;
+
+			tracker.record({
+				personaId: pid,
+				sessionId: "sess-1" as any,
+				timestamp: new Date().toISOString(),
+				model: "anthropic/claude-sonnet-4-5" as any,
+				tokens: { inputTokens: 1000, outputTokens: 200, cacheCreationInputTokens: 0, cacheReadInputTokens: 0 },
+				costUSD: 0.006,
+				step: "navigate",
+				recoveryLevel: 0,
+			});
+
+			tracker.record({
+				personaId: pid,
+				sessionId: "sess-1" as any,
+				timestamp: new Date().toISOString(),
+				model: "anthropic/claude-sonnet-4-5" as any,
+				tokens: { inputTokens: 2000, outputTokens: 400, cacheCreationInputTokens: 0, cacheReadInputTokens: 0 },
+				costUSD: 0.012,
+				step: "click",
+				recoveryLevel: 0,
+			});
+
+			expect(tracker.recordCount).toBe(2);
+			expect(tracker.getPersonaRecords(pid)).toHaveLength(2);
+
+			const summary = tracker.summarizePersona(pid, "Haruka", "test");
+			expect(summary.totalRequests).toBe(2);
+			expect(summary.totalCostUSD).toBeCloseTo(0.018);
+			expect(summary.totalTokens.inputTokens).toBe(3000);
+		});
+
+		it("generates report with cost comparison", () => {
+			const tracker = new BillingTracker();
+			const pid1 = "haruka" as PersonaId;
+			const pid2 = "kenji" as PersonaId;
+
+			tracker.record({
+				personaId: pid1, sessionId: "s1" as any,
+				timestamp: new Date().toISOString(),
+				model: "anthropic/claude-sonnet-4-5" as any,
+				tokens: { inputTokens: 1000, outputTokens: 200, cacheCreationInputTokens: 0, cacheReadInputTokens: 0 },
+				costUSD: 0.01, step: "nav", recoveryLevel: 0,
+			});
+			tracker.record({
+				personaId: pid2, sessionId: "s2" as any,
+				timestamp: new Date().toISOString(),
+				model: "anthropic/claude-sonnet-4-5" as any,
+				tokens: { inputTokens: 500, outputTokens: 100, cacheCreationInputTokens: 0, cacheReadInputTokens: 0 },
+				costUSD: 0.003, step: "nav", recoveryLevel: 0,
+			});
+
+			const names = new Map<PersonaId, string>();
+			names.set(pid1, "Haruka");
+			names.set(pid2, "Kenji");
+
+			const report = tracker.generateReport("test", names);
+			expect(report.personas).toHaveLength(2);
+			expect(report.totalCostUSD).toBeCloseTo(0.013);
+			expect(report.costPerPersonaComparison[0]!.personaId).toBe(pid1); // Haruka costs more
+		});
+
+		it("exports and imports JSONL", () => {
+			const tracker = new BillingTracker();
+			tracker.record({
+				personaId: "haruka" as PersonaId, sessionId: "s1" as any,
+				timestamp: "2026-01-01T00:00:00Z",
+				model: "anthropic/claude-sonnet-4-5" as any,
+				tokens: { inputTokens: 100, outputTokens: 50, cacheCreationInputTokens: 0, cacheReadInputTokens: 0 },
+				costUSD: 0.001, step: "test", recoveryLevel: 0,
+			});
+
+			const jsonl = tracker.exportJsonl();
+			expect(jsonl.split("\n")).toHaveLength(1);
+
+			const tracker2 = new BillingTracker();
+			tracker2.importJsonl(jsonl);
+			expect(tracker2.recordCount).toBe(1);
+		});
+	});
+}

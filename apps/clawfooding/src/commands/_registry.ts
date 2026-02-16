@@ -8,8 +8,7 @@ import { benchCommandDef } from "./bench.ts";
 export const mainCommand = define({
 	args: sharedArgs,
 	run: async (ctx) => {
-		// Default: show help
-		ctx.showHelp();
+		ctx.log("Use --help for available commands.");
 	},
 });
 

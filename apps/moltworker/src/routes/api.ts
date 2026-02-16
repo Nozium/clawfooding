@@ -1,5 +1,16 @@
 import { Hono } from "hono";
+import { BillingTracker, calculateCost } from "@clawfooding/core/billing";
+import { buildAgentSystemPrompt, buildGoalPrompt } from "@clawfooding/core/prompts";
+import {
+	fittsMovementTime,
+	hickDecisionTime,
+	misclickProbability,
+	cognitiveLoadScore,
+} from "@clawfooding/core/cognitive";
+import { createPersonaId, createModelName, createSessionId } from "@clawfooding/core/types";
+import type { PersonaId, Persona, TokenUsage } from "@clawfooding/core/types";
 import type { Env } from "../index.ts";
+import { PRESET_PERSONAS } from "../_personas.ts";
 
 export const apiRoutes = new Hono<{ Bindings: Env }>();
 
@@ -9,15 +20,6 @@ export const apiRoutes = new Hono<{ Bindings: Env }>();
  * POST /api/test/run
  *
  * Start a new cognitive pattern test.
- * Body:
- * {
- *   target_url: string,
- *   goal: string,
- *   personas: string[],
- *   model?: string,
- *   dry_run?: boolean,
- *   permissions?: Permissions
- * }
  */
 apiRoutes.post("/test/run", async (c) => {
 	const body = await c.req.json<{
@@ -34,9 +36,33 @@ apiRoutes.post("/test/run", async (c) => {
 
 	const testId = crypto.randomUUID();
 	const model = body.model ?? c.env.DEFAULT_MODEL;
-	const personas = body.personas?.length > 0
+	const personaIds = body.personas?.length > 0
 		? body.personas
 		: ["haruka", "kenji", "yuki"];
+
+	// Validate personas exist
+	const invalidPersonas = personaIds.filter((p) => !PRESET_PERSONAS[p]);
+	if (invalidPersonas.length > 0) {
+		return c.json({
+			error: `Unknown personas: ${invalidPersonas.join(", ")}`,
+			available: Object.keys(PRESET_PERSONAS),
+		}, 400);
+	}
+
+	// Generate system prompts for each persona (preview)
+	const personaPrompts = personaIds.map((pid) => {
+		const persona = PRESET_PERSONAS[pid]!;
+		return {
+			persona_id: pid,
+			persona_name: persona.name,
+			system_prompt_preview: buildAgentSystemPrompt(persona).slice(0, 200) + "...",
+			cognitive_metrics: {
+				fitts_movement_300px_44btn: Math.round(fittsMovementTime(300, 44, persona.motor_profile)),
+				hick_decision_7choices: Math.round(hickDecisionTime(7, persona.cognitive_profile)),
+				misclick_probability: Number(misclickProbability(300, 44, persona.motor_profile).toFixed(3)),
+			},
+		};
+	});
 
 	// Store test session
 	await c.env.SESSION_KV.put(
@@ -46,13 +72,14 @@ apiRoutes.post("/test/run", async (c) => {
 			status: "queued",
 			target_url: body.target_url,
 			goal: body.goal,
-			personas,
+			personas: personaIds,
 			model,
 			dry_run: body.dry_run ?? false,
+			persona_prompts: personaPrompts,
 			created_at: new Date().toISOString(),
 			updated_at: new Date().toISOString(),
 		}),
-		{ expirationTtl: 86400 }, // 24h TTL
+		{ expirationTtl: 86400 },
 	);
 
 	// Log to D1
@@ -60,60 +87,41 @@ apiRoutes.post("/test/run", async (c) => {
 		`INSERT INTO test_runs (id, target_url, goal, personas, model, status, created_at)
 		 VALUES (?, ?, ?, ?, ?, ?, ?)`,
 	)
-		.bind(
-			testId,
-			body.target_url,
-			body.goal,
-			JSON.stringify(personas),
-			model,
-			"queued",
-			new Date().toISOString(),
-		)
+		.bind(testId, body.target_url, body.goal, JSON.stringify(personaIds), model, "queued", new Date().toISOString())
 		.run()
-		.catch(() => {
-			// D1 may not be initialized yet - graceful degradation
-		});
+		.catch(() => { /* D1 may not be initialized - graceful degradation */ });
 
 	return c.json({
 		test_id: testId,
 		status: "queued",
-		personas,
+		personas: personaPrompts,
 		model,
+		endpoints: {
+			status: `/api/test/${testId}/status`,
+			report: `/api/test/${testId}/report`,
+		},
 		message: "Test queued. Use GET /api/test/:id/status to check progress.",
 	}, 201);
 });
 
 /**
  * GET /api/test/:id/status
- *
- * Get the status of a running test.
  */
 apiRoutes.get("/test/:id/status", async (c) => {
 	const testId = c.req.param("id");
 	const data = await c.env.SESSION_KV.get(`test:${testId}`);
-
-	if (!data) {
-		return c.json({ error: "Test not found" }, 404);
-	}
-
+	if (!data) return c.json({ error: "Test not found" }, 404);
 	return c.json(JSON.parse(data));
 });
 
 /**
  * GET /api/test/:id/report
- *
- * Get the billing report for a completed test.
  */
 apiRoutes.get("/test/:id/report", async (c) => {
 	const testId = c.req.param("id");
-
 	const report = await c.env.REPORTS_BUCKET.get(`reports/${testId}.json`);
-	if (!report) {
-		return c.json({ error: "Report not found. Test may still be running." }, 404);
-	}
-
-	const data = await report.text();
-	return c.json(JSON.parse(data));
+	if (!report) return c.json({ error: "Report not found. Test may still be running." }, 404);
+	return c.json(JSON.parse(await report.text()));
 });
 
 // ── Billing ────────────────────────────────────────────────────────────
@@ -121,48 +129,41 @@ apiRoutes.get("/test/:id/report", async (c) => {
 /**
  * GET /api/billing
  *
- * Get aggregated billing data across all tests.
- * Query params:
- *   since: ISO date string
- *   until: ISO date string
- *   persona: filter by persona ID
- *   group_by: persona | model | test
+ * Aggregated billing with BillingTracker.
  */
 apiRoutes.get("/billing", async (c) => {
 	const since = c.req.query("since");
 	const until = c.req.query("until");
 	const persona = c.req.query("persona");
-	const groupBy = c.req.query("group_by") ?? "persona";
 
-	// List billing logs from R2
-	const listResult = await c.env.BILLING_BUCKET.list({
-		prefix: "billing/",
-	});
+	const tracker = new BillingTracker();
 
-	const records: unknown[] = [];
+	// Load billing records from R2
+	const listResult = await c.env.BILLING_BUCKET.list({ prefix: "billing/" });
+
 	for (const object of listResult.objects) {
 		const data = await c.env.BILLING_BUCKET.get(object.key);
 		if (!data) continue;
 		const text = await data.text();
-		const lines = text.split("\n").filter((l) => l.trim());
-		for (const line of lines) {
-			try {
-				const record = JSON.parse(line);
-				// Apply filters
-				if (since && record.timestamp < since) continue;
-				if (until && record.timestamp > until) continue;
-				if (persona && record.personaId !== persona) continue;
-				records.push(record);
-			} catch {
-				// Skip malformed lines
-			}
-		}
+		tracker.importJsonl(text);
+	}
+
+	// Build persona name map
+	const personaNameMap = new Map<PersonaId, string>();
+	for (const [id, p] of Object.entries(PRESET_PERSONAS)) {
+		personaNameMap.set(createPersonaId(id), p.name);
+	}
+
+	const report = tracker.generateReport("All Tests", personaNameMap);
+
+	// Apply filters
+	if (persona) {
+		report.personas = report.personas.filter((p) => String(p.personaId) === persona);
 	}
 
 	return c.json({
-		record_count: records.length,
-		group_by: groupBy,
-		records,
+		...report,
+		filters: { since, until, persona },
 	});
 });
 
@@ -171,47 +172,45 @@ apiRoutes.get("/billing", async (c) => {
 /**
  * GET /api/personas
  *
- * List available personas on the managed service.
+ * List available personas with cognitive metrics.
  */
 apiRoutes.get("/personas", async (c) => {
-	const presets = [
-		{
-			id: "haruka",
-			name: "Haruka (初心者)",
-			description: "32歳、非エンジニア、初回利用。オンボーディング不備を検出。",
-			detection_focus: ["onboarding", "jargon", "navigation_flow"],
+	const personas = Object.entries(PRESET_PERSONAS).map(([id, persona]) => ({
+		id,
+		name: persona.name,
+		description: persona.description ?? "",
+		demographics: persona.demographics,
+		cognitive_summary: {
+			navigation: persona.cognitive_profile.navigation_strategy,
+			error_recovery: persona.cognitive_profile.error_recovery,
+			reading_pattern: persona.cognitive_profile.reading_pattern,
+			working_memory: persona.cognitive_profile.working_memory_load,
 		},
-		{
-			id: "kenji",
-			name: "Kenji (急いでる人)",
-			description: "45歳、マネージャー、時間がない。CTA視認性、ステップ過多を検出。",
-			detection_focus: ["cta_visibility", "step_count", "confirmation_dialogs"],
+		derived_metrics: {
+			fitts_movement_ms: Math.round(fittsMovementTime(300, 44, persona.motor_profile)),
+			hick_decision_ms: Math.round(hickDecisionTime(7, persona.cognitive_profile)),
+			misclick_probability: Number(misclickProbability(300, 44, persona.motor_profile).toFixed(3)),
 		},
-		{
-			id: "yuki",
-			name: "Yuki (パワーユーザー)",
-			description: "28歳、エンジニア、毎日使う。ショートカット不在、一括操作不備を検出。",
-			detection_focus: ["shortcuts", "bulk_operations", "efficiency_paths"],
-		},
-		{
-			id: "takeshi",
-			name: "Takeshi (高齢者)",
-			description: "68歳、退職者、iPad利用。フォントサイズ、タッチターゲット、コントラストを検出。",
-			detection_focus: ["font_size", "touch_target", "contrast"],
-		},
-		{
-			id: "mika",
-			name: "Mika (アクセシビリティ)",
-			description: "25歳、視覚障害、スクリーンリーダー。aria-label、Tab順序、alt属性を検出。",
-			detection_focus: ["aria_labels", "tab_order", "image_alt"],
-		},
-		{
-			id: "chaos",
-			name: "Chaos (エッジケース)",
-			description: "予測不能な操作パターン。想定外入力、race condition、UI破壊を検出。",
-			detection_focus: ["edge_cases", "race_conditions", "ui_breakage"],
-		},
-	];
+	}));
 
-	return c.json({ personas: presets });
+	return c.json({ personas });
+});
+
+/**
+ * GET /api/personas/:id/prompt
+ *
+ * Preview the generated system prompt for a persona.
+ */
+apiRoutes.get("/personas/:id/prompt", async (c) => {
+	const id = c.req.param("id");
+	const persona = PRESET_PERSONAS[id];
+	if (!persona) return c.json({ error: `Persona "${id}" not found` }, 404);
+
+	const systemPrompt = buildAgentSystemPrompt(persona);
+	return c.json({
+		persona_id: id,
+		persona_name: persona.name,
+		system_prompt: systemPrompt,
+		token_estimate: Math.ceil(systemPrompt.length / 4),
+	});
 });

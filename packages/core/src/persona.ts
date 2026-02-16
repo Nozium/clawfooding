@@ -10,7 +10,7 @@ import {
 } from "./_types.ts";
 
 /** Default directory for built-in personas */
-const PERSONAS_DIR = path.resolve(import.meta.dirname ?? ".", "../../personas");
+const PERSONAS_DIR = path.resolve(import.meta.dirname ?? ".", "../../../personas");
 
 /**
  * Load a persona from a YAML file.

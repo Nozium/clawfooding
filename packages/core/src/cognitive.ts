@@ -338,3 +338,89 @@ export function cognitiveLoadScore(
 
 	return Math.round(hickComponent + millerComponent + densityComponent);
 }
+
+// ── In-source Tests ────────────────────────────────────────────────────
+
+if (import.meta.vitest) {
+	const { describe, it, expect } = import.meta.vitest;
+
+	describe("fittsMovementTime", () => {
+		it("returns higher time for low precision personas", () => {
+			const lowPrec: MotorProfile = { pointer_precision: "low", click_speed_ms: 400, scroll_behavior: "gradual", tap_accuracy_offset_px: 8 };
+			const highPrec: MotorProfile = { pointer_precision: "high", click_speed_ms: 150, scroll_behavior: "aggressive", tap_accuracy_offset_px: 2 };
+			const low = fittsMovementTime(300, 44, lowPrec);
+			const high = fittsMovementTime(300, 44, highPrec);
+			expect(low).toBeGreaterThan(high);
+		});
+
+		it("returns higher time for distant targets", () => {
+			const motor: MotorProfile = { pointer_precision: "medium", click_speed_ms: 200, scroll_behavior: "gradual", tap_accuracy_offset_px: 3 };
+			const near = fittsMovementTime(50, 44, motor);
+			const far = fittsMovementTime(500, 44, motor);
+			expect(far).toBeGreaterThan(near);
+		});
+
+		it("returns higher time for smaller targets", () => {
+			const motor: MotorProfile = { pointer_precision: "medium", click_speed_ms: 200, scroll_behavior: "gradual", tap_accuracy_offset_px: 3 };
+			const big = fittsMovementTime(300, 100, motor);
+			const small = fittsMovementTime(300, 20, motor);
+			expect(small).toBeGreaterThan(big);
+		});
+	});
+
+	describe("hickDecisionTime", () => {
+		it("increases logarithmically with choices", () => {
+			const cog: CognitiveProfile = { navigation_strategy: "exploratory", information_processing: "serial", risk_tolerance: "low", error_recovery: "retreat", reading_pattern: "f_pattern", working_memory_load: 3, attention_span: "short", decision_speed: "slow" };
+			const t2 = hickDecisionTime(2, cog);
+			const t7 = hickDecisionTime(7, cog);
+			const t20 = hickDecisionTime(20, cog);
+			expect(t7).toBeGreaterThan(t2);
+			expect(t20).toBeGreaterThan(t7);
+			// Logarithmic: doubling choices shouldn't double time
+			expect(t20 / t7).toBeLessThan(2);
+		});
+
+		it("returns lower time for fast decision personas", () => {
+			const slow: CognitiveProfile = { navigation_strategy: "exploratory", information_processing: "serial", risk_tolerance: "low", error_recovery: "retreat", reading_pattern: "f_pattern", working_memory_load: 3, attention_span: "short", decision_speed: "slow" };
+			const fast: CognitiveProfile = { ...slow, decision_speed: "fast" };
+			expect(hickDecisionTime(7, fast)).toBeLessThan(hickDecisionTime(7, slow));
+		});
+	});
+
+	describe("formInputErrorProbability", () => {
+		it("is low when fields <= working memory", () => {
+			const cog: CognitiveProfile = { navigation_strategy: "exploratory", information_processing: "serial", risk_tolerance: "low", error_recovery: "retreat", reading_pattern: "f_pattern", working_memory_load: 7, attention_span: "short", decision_speed: "slow" };
+			expect(formInputErrorProbability(3, cog)).toBeLessThan(0.05);
+		});
+
+		it("increases sharply when fields exceed working memory", () => {
+			const cog: CognitiveProfile = { navigation_strategy: "exploratory", information_processing: "serial", risk_tolerance: "low", error_recovery: "retreat", reading_pattern: "f_pattern", working_memory_load: 3, attention_span: "short", decision_speed: "slow" };
+			const within = formInputErrorProbability(3, cog);
+			const over = formInputErrorProbability(10, cog);
+			expect(over).toBeGreaterThan(within * 3);
+		});
+	});
+
+	describe("misclickProbability", () => {
+		it("is bounded between 0 and 0.8", () => {
+			const motor: MotorProfile = { pointer_precision: "low", click_speed_ms: 400, scroll_behavior: "gradual", tap_accuracy_offset_px: 8 };
+			const p = misclickProbability(1000, 5, motor);
+			expect(p).toBeGreaterThan(0);
+			expect(p).toBeLessThanOrEqual(0.8);
+		});
+	});
+
+	describe("cognitiveLoadScore", () => {
+		it("returns 0-100 range", () => {
+			const score = cognitiveLoadScore(10, 5, 50, 390 * 844);
+			expect(score).toBeGreaterThanOrEqual(0);
+			expect(score).toBeLessThanOrEqual(100);
+		});
+
+		it("increases with more form fields", () => {
+			const low = cognitiveLoadScore(5, 2, 20, 390 * 844);
+			const high = cognitiveLoadScore(5, 12, 20, 390 * 844);
+			expect(high).toBeGreaterThan(low);
+		});
+	});
+}

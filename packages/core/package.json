@@ -23,7 +23,15 @@
 		"./types": {
 			"types": "./src/_types.ts",
 			"default": "./src/_types.ts"
+		},
+		"./prompts": {
+			"types": "./src/prompts/index.ts",
+			"default": "./src/prompts/index.ts"
 		}
+	},
+	"scripts": {
+		"test": "vitest run",
+		"typecheck": "tsc --noEmit"
 	},
 	"devDependencies": {
 		"valibot": "catalog:runtime",
