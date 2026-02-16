@@ -4,7 +4,7 @@ import { define } from "gunshi";
 import pc from "picocolors";
 import YAML from "yaml";
 import * as v from "valibot";
-import { loadPersona, generateSoulMd } from "@clawfooding/core/persona";
+import { loadPersona } from "@clawfooding/core/persona";
 import { BillingTracker, calculateCost } from "@clawfooding/core/billing";
 import {
 	fittsMovementTime,
@@ -12,7 +12,6 @@ import {
 	misclickProbability,
 	formInputErrorProbability,
 	cognitiveLoadScore,
-	abandonmentProbability,
 } from "@clawfooding/core/cognitive";
 import {
 	isUrlAllowed,
@@ -22,12 +21,16 @@ import {
 	SessionTimer,
 	DryRunLogger,
 } from "@clawfooding/core/security";
-import { scenarioSchema, createPersonaId, createModelName, createSessionId } from "@clawfooding/core/types";
-import type { PersonaId, Scenario, Persona, Permissions } from "@clawfooding/core/types";
+import { scenarioSchema, createModelName, createSessionId } from "@clawfooding/core/types";
+import type { PersonaId } from "@clawfooding/core/types";
+import { buildAgentSystemPrompt, buildStepPrompt } from "@clawfooding/core/prompts";
+import { createLLMClient, validateApiConfig } from "@clawfooding/core/llm";
+import type { LLMClient } from "@clawfooding/core/llm";
 import { formatCurrency, formatDuration, formatTokens } from "@clawfooding/terminal/format";
-import { Table, renderSummary } from "@clawfooding/terminal/table";
+import { Table } from "@clawfooding/terminal/table";
 import { sharedArgs } from "../_shared-args.ts";
 import { DEFAULT_BILLING_DIR, BILLING_LOG_EXTENSION } from "../_consts.ts";
+import { resolveConfig, toLLMClientConfig } from "../_config.ts";
 
 export const runCommandDef = define({
 	args: {
@@ -49,6 +52,11 @@ export const runCommandDef = define({
 			description: "LLM model to use (e.g., anthropic/claude-sonnet-4-5)",
 			default: "anthropic/claude-sonnet-4-5",
 		},
+		simulate: {
+			type: "boolean",
+			description: "Simulate mode: use mock tokens instead of real API calls (no API key needed)",
+			default: false,
+		},
 		dry_run: {
 			type: "boolean",
 			description: "Dry run mode: log operations without executing writes",
@@ -60,13 +68,45 @@ export const runCommandDef = define({
 			description: "Output directory for billing logs and reports",
 			default: DEFAULT_BILLING_DIR,
 		},
+		api_key: {
+			type: "string",
+			description: "API key (overrides env var)",
+		},
+		base_url: {
+			type: "string",
+			description: "Custom API base URL (for OpenAI-compatible endpoints)",
+		},
 	},
 	run: async (ctx) => {
-		const { scenario: scenarioPath, persona: personaOverride, model, dry_run, output, json, debug } = ctx.values;
+		const {
+			scenario: scenarioPath, persona: personaOverride, model,
+			simulate, dry_run, output, json, debug, api_key, base_url,
+		} = ctx.values;
 
 		if (!scenarioPath) {
 			console.error(pc.red("Error: --scenario is required"));
 			process.exit(1);
+		}
+
+		// ── Resolve Config ──────────────────────────────────────────────
+		const config = resolveConfig({
+			model,
+			anthropicApiKey: api_key,
+			openaiApiKey: api_key,
+			openaiBaseUrl: base_url,
+		});
+		const llmConfig = toLLMClientConfig(config);
+
+		// ── Validate API key (unless simulate mode) ─────────────────────
+		let llmClient: LLMClient | null = null;
+		if (!simulate) {
+			const validationError = validateApiConfig(llmConfig);
+			if (validationError) {
+				console.error(pc.red(`Error: ${validationError}`));
+				console.log(pc.dim("Tip: Use --simulate for offline cost estimation without an API key."));
+				process.exit(1);
+			}
+			llmClient = createLLMClient(llmConfig);
 		}
 
 		// ── Load Scenario ────────────────────────────────────────────────
@@ -98,6 +138,7 @@ export const runCommandDef = define({
 		console.log(pc.dim(`   Scenario: ${scenario.name}`));
 		console.log(pc.dim(`   Model: ${model}`));
 		console.log(pc.dim(`   Personas: ${personaNames.join(", ")}`));
+		console.log(pc.dim(`   Mode: ${simulate ? "simulate (mock)" : "live API"}`));
 		console.log(pc.dim(`   Dry Run: ${dry_run ? "yes" : "no"}`));
 		console.log("");
 
@@ -123,6 +164,13 @@ export const runCommandDef = define({
 			const sessionId = createSessionId(
 				`${personaId}-${Date.now()}`,
 			);
+
+			// Build system prompt for this persona
+			const systemPrompt = buildAgentSystemPrompt(persona);
+
+			if (debug) {
+				console.log(pc.dim(`  System prompt: ${systemPrompt.length} chars`));
+			}
 
 			// ── Simulate Cognitive Test Steps ────────────────────────────
 			const steps = scenario.steps ?? [
@@ -155,34 +203,84 @@ export const runCommandDef = define({
 					console.log(pc.yellow(`  ⚠ Possible loop detected for: ${step.action}`));
 				}
 
-				// Simulate cognitive delay based on persona
-				const hickDelay = hickDecisionTime(
-					steps.length,
-					persona.cognitive_profile,
-				);
-				const fittsDelay = fittsMovementTime(
-					200, // Approximate distance
-					50,  // Approximate target width
-					persona.motor_profile,
-				);
+				// Cognitive delay estimation
+				const hickDelay = hickDecisionTime(steps.length, persona.cognitive_profile);
+				const fittsDelay = fittsMovementTime(200, 50, persona.motor_profile);
 				const totalDelay = hickDelay + fittsDelay + persona.motor_profile.click_speed_ms;
 
-				// Simulate API call for this step (cognitive agent decision)
-				const simulatedTokens = {
-					inputTokens: 1500 + Math.floor(Math.random() * 2000),
-					outputTokens: 300 + Math.floor(Math.random() * 500),
-					cacheCreationInputTokens: stepIndex === 0 ? 500 : 0,
-					cacheReadInputTokens: stepIndex > 0 ? 800 : 0,
-				};
+				let tokens;
+				let cost;
+				let llmResponse = "";
+				let latencyMs = 0;
 
-				const cost = calculateCost(model, simulatedTokens);
+				if (simulate || !llmClient) {
+					// ── Simulate Mode: mock tokens ──────────────────────
+					tokens = {
+						inputTokens: 1500 + Math.floor(Math.random() * 2000),
+						outputTokens: 300 + Math.floor(Math.random() * 500),
+						cacheCreationInputTokens: stepIndex === 0 ? 500 : 0,
+						cacheReadInputTokens: stepIndex > 0 ? 800 : 0,
+					};
+					cost = calculateCost(model, tokens);
+				} else {
+					// ── Live Mode: real API call ────────────────────────
+					const pageSnapshot = `[Page: ${scenario.target_url}] (Step ${stepIndex + 1}: ${step.description ?? step.action})`;
 
-				// Calculate error probabilities for this step
+					const stepPrompt = buildStepPrompt(
+						step,
+						pageSnapshot,
+						stepIndex,
+						steps.length,
+					);
+
+					if (dry_run && dryRunLogger) {
+						const opType = step.action === "navigate" ? "navigation" : "click";
+						dryRunLogger.log(
+							opType as never,
+							`LLM call: ${step.description ?? step.action}`,
+							scenario.target_url,
+							isOperationAllowed(opType as never, scenario.permissions),
+						);
+						// In dry-run with live mode, show prompt but don't call
+						console.log(pc.dim(`  [dry-run] Would send ${systemPrompt.length + stepPrompt.length} chars to ${model}`));
+						tokens = {
+							inputTokens: 0, outputTokens: 0,
+							cacheCreationInputTokens: 0, cacheReadInputTokens: 0,
+						};
+						cost = 0;
+					} else {
+						try {
+							const result = await llmClient.chat(
+								[
+									{ role: "system", content: systemPrompt },
+									{ role: "user", content: stepPrompt },
+								],
+								{ maxTokens: 2048, temperature: 0.7 },
+							);
+
+							tokens = result.tokens;
+							cost = calculateCost(model, tokens);
+							llmResponse = result.content;
+							latencyMs = result.latencyMs;
+
+							if (debug) {
+								console.log(pc.dim(`  LLM response (${result.latencyMs}ms):`));
+								console.log(pc.dim(`  ${llmResponse.slice(0, 200)}...`));
+							}
+						} catch (err) {
+							const message = err instanceof Error ? err.message : String(err);
+							console.error(pc.red(`  ✗ API error: ${message}`));
+							tokens = {
+								inputTokens: 0, outputTokens: 0,
+								cacheCreationInputTokens: 0, cacheReadInputTokens: 0,
+							};
+							cost = 0;
+						}
+					}
+				}
+
+				// Calculate error probabilities
 				const misclickProb = misclickProbability(200, 50, persona.motor_profile);
-				const formErrorProb = formInputErrorProbability(
-					step.action === "interact" ? 5 : 0,
-					persona.cognitive_profile,
-				);
 
 				// Record billing
 				tracker.record({
@@ -190,13 +288,13 @@ export const runCommandDef = define({
 					sessionId,
 					timestamp: new Date().toISOString(),
 					model: modelName,
-					tokens: simulatedTokens,
+					tokens,
 					costUSD: cost,
 					step: step.description ?? step.action,
 					recoveryLevel: 0,
 				});
 
-				if (dryRunLogger) {
+				if (dryRunLogger && !llmClient) {
 					const opType = step.action === "navigate" ? "navigation" : "click";
 					dryRunLogger.log(
 						opType as never,
@@ -212,10 +310,11 @@ export const runCommandDef = define({
 				const delayStr = formatDuration(totalDelay);
 
 				if (!json) {
-					console.log(
-						`${stepLabel} ${step.description ?? step.action}` +
-						pc.dim(` (${delayStr}, ${costStr}, P(err)=${misclickProb.toFixed(3)})`)
-					);
+					let line = `${stepLabel} ${step.description ?? step.action}`;
+					line += pc.dim(` (${delayStr}, ${costStr}, P(err)=${misclickProb.toFixed(3)}`);
+					if (latencyMs > 0) line += pc.dim(`, API: ${latencyMs}ms`);
+					line += pc.dim(")");
+					console.log(line);
 				}
 			}
 

@@ -8,9 +8,12 @@
  * 4. Defaults
  */
 
+import type { LLMClientConfig } from "@clawfooding/core/llm";
+
 export interface ResolvedConfig {
 	targetUrl: string | undefined;
 	model: string;
+	provider: "anthropic" | "openai" | "auto";
 	billingDir: string;
 	testEmail: string | undefined;
 	testPassword: string | undefined;
@@ -19,6 +22,8 @@ export interface ResolvedConfig {
 	apiUrl: string | undefined;
 	apiKey: string | undefined;
 	anthropicApiKey: string | undefined;
+	openaiApiKey: string | undefined;
+	openaiBaseUrl: string | undefined;
 }
 
 export function resolveConfig(overrides?: Partial<ResolvedConfig>): ResolvedConfig {
@@ -30,6 +35,10 @@ export function resolveConfig(overrides?: Partial<ResolvedConfig>): ResolvedConf
 			overrides?.model ??
 			process.env["CLAWFOODING_DEFAULT_MODEL"] ??
 			"anthropic/claude-sonnet-4-5",
+		provider:
+			overrides?.provider ??
+			(process.env["CLAWFOODING_PROVIDER"] as "anthropic" | "openai" | "auto" | undefined) ??
+			"auto",
 		billingDir:
 			overrides?.billingDir ??
 			process.env["CLAWFOODING_BILLING_DIR"] ??
@@ -55,5 +64,22 @@ export function resolveConfig(overrides?: Partial<ResolvedConfig>): ResolvedConf
 		anthropicApiKey:
 			overrides?.anthropicApiKey ??
 			process.env["ANTHROPIC_API_KEY"],
+		openaiApiKey:
+			overrides?.openaiApiKey ??
+			process.env["OPENAI_API_KEY"] ??
+			process.env["CODEX_API_KEY"],
+		openaiBaseUrl:
+			overrides?.openaiBaseUrl ??
+			process.env["OPENAI_BASE_URL"],
+	};
+}
+
+export function toLLMClientConfig(config: ResolvedConfig): LLMClientConfig {
+	return {
+		provider: config.provider,
+		model: config.model,
+		anthropicApiKey: config.anthropicApiKey,
+		openaiApiKey: config.openaiApiKey,
+		openaiBaseUrl: config.openaiBaseUrl,
 	};
 }

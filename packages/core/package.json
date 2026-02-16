@@ -27,6 +27,10 @@
 		"./prompts": {
 			"types": "./src/prompts/index.ts",
 			"default": "./src/prompts/index.ts"
+		},
+		"./llm": {
+			"types": "./src/llm.ts",
+			"default": "./src/llm.ts"
 		}
 	},
 	"scripts": {
@@ -36,6 +40,8 @@
 	"devDependencies": {
 		"valibot": "catalog:runtime",
 		"yaml": "catalog:runtime",
+		"@anthropic-ai/sdk": "catalog:runtime",
+		"openai": "catalog:runtime",
 		"typescript": "catalog:build",
 		"vitest": "catalog:testing",
 		"@types/node": "catalog:types"

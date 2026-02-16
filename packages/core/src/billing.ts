@@ -281,6 +281,13 @@ export class BillingTracker {
 	}
 
 	/**
+	 * Get all records (read-only).
+	 */
+	getAllRecords(): readonly PersonaBillingRecord[] {
+		return this.records;
+	}
+
+	/**
 	 * Clear all records.
 	 */
 	clear(): void {

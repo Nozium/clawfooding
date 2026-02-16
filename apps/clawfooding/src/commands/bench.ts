@@ -3,18 +3,18 @@ import { define } from "gunshi";
 import pc from "picocolors";
 import YAML from "yaml";
 import * as v from "valibot";
-import { BillingTracker, calculateCost, listKnownModels } from "@clawfooding/core/billing";
+import { BillingTracker, calculateCost } from "@clawfooding/core/billing";
 import { loadPersona } from "@clawfooding/core/persona";
-import {
-	fittsMovementTime,
-	hickDecisionTime,
-	cognitiveLoadScore,
-} from "@clawfooding/core/cognitive";
-import { scenarioSchema, createPersonaId, createModelName, createSessionId } from "@clawfooding/core/types";
+import { cognitiveLoadScore } from "@clawfooding/core/cognitive";
+import { buildAgentSystemPrompt, buildStepPrompt, buildEvaluationPrompt } from "@clawfooding/core/prompts";
+import { createLLMClient, validateApiConfig } from "@clawfooding/core/llm";
+import type { LLMClient } from "@clawfooding/core/llm";
+import { scenarioSchema, createModelName, createSessionId } from "@clawfooding/core/types";
 import type { PersonaId } from "@clawfooding/core/types";
 import { formatCurrency } from "@clawfooding/terminal/format";
 import { Table } from "@clawfooding/terminal/table";
 import { sharedArgs } from "../_shared-args.ts";
+import { resolveConfig, toLLMClientConfig } from "../_config.ts";
 
 export const benchCommandDef = define({
 	args: {
@@ -36,9 +36,18 @@ export const benchCommandDef = define({
 			short: "p",
 			description: "Persona to use for benchmarking",
 		},
+		simulate: {
+			type: "boolean",
+			description: "Simulate mode: use mock metrics instead of real API calls",
+			default: false,
+		},
+		api_key: {
+			type: "string",
+			description: "API key (overrides env var)",
+		},
 	},
 	run: async (ctx) => {
-		const { scenario: scenarioPath, models: modelsStr, persona: personaName, json } = ctx.values;
+		const { scenario: scenarioPath, models: modelsStr, persona: personaName, json, simulate, api_key, debug } = ctx.values;
 
 		if (!scenarioPath) {
 			console.error(pc.red("Error: --scenario is required"));
@@ -70,7 +79,14 @@ export const benchCommandDef = define({
 		console.log(pc.dim(`   Scenario: ${scenario.name}`));
 		console.log(pc.dim(`   Persona: ${persona.name}`));
 		console.log(pc.dim(`   Models: ${models.join(", ")}`));
+		console.log(pc.dim(`   Mode: ${simulate ? "simulate (mock)" : "live API"}`));
 		console.log("");
+
+		const steps = scenario.steps ?? [
+			{ action: "navigate", description: "Navigate to target URL" },
+			{ action: "scan", description: "Visual scan of page elements" },
+			{ action: "interact", description: "Interact with primary elements" },
+		];
 
 		// ── Run benchmark per model ──────────────────────────────────────
 		const results: Array<{
@@ -86,12 +102,6 @@ export const benchCommandDef = define({
 			totalRequests: number;
 		}> = [];
 
-		const steps = scenario.steps ?? [
-			{ action: "navigate", description: "Navigate to target URL" },
-			{ action: "scan", description: "Visual scan of page elements" },
-			{ action: "interact", description: "Interact with primary elements" },
-		];
-
 		for (const model of models) {
 			console.log(pc.dim(`  Benchmarking: ${model}...`));
 
@@ -99,8 +109,6 @@ export const benchCommandDef = define({
 			const modelName = createModelName(model);
 			const sessionId = createSessionId(`bench-${model}-${Date.now()}`);
 
-			// Simulate cognitive test with this model
-			// In a real implementation, this would actually call the LLM
 			let completedSteps = 0;
 			let correctActions = 0;
 			let recoveredWithinUI = 0;
@@ -108,40 +116,100 @@ export const benchCommandDef = define({
 			let totalLatency = 0;
 			let hallucinations = 0;
 
-			for (const [i, step] of steps.entries()) {
-				const simulatedTokens = {
-					inputTokens: 1200 + Math.floor(Math.random() * 2500),
-					outputTokens: 250 + Math.floor(Math.random() * 600),
-					cacheCreationInputTokens: i === 0 ? 600 : 0,
-					cacheReadInputTokens: i > 0 ? 700 : 0,
-				};
+			if (simulate) {
+				// ── Simulate mode ─────────────────────────────────────
+				for (const [i, step] of steps.entries()) {
+					const simulatedTokens = {
+						inputTokens: 1200 + Math.floor(Math.random() * 2500),
+						outputTokens: 250 + Math.floor(Math.random() * 600),
+						cacheCreationInputTokens: i === 0 ? 600 : 0,
+						cacheReadInputTokens: i > 0 ? 700 : 0,
+					};
 
-				const cost = calculateCost(model, simulatedTokens);
+					const cost = calculateCost(model, simulatedTokens);
+					tracker.record({
+						personaId: pid, sessionId,
+						timestamp: new Date().toISOString(),
+						model: modelName, tokens: simulatedTokens,
+						costUSD: cost, step: step.description ?? step.action,
+						recoveryLevel: 0,
+					});
 
-				tracker.record({
-					personaId: pid,
-					sessionId,
-					timestamp: new Date().toISOString(),
-					model: modelName,
-					tokens: simulatedTokens,
-					costUSD: cost,
-					step: step.description ?? step.action,
-					recoveryLevel: 0,
+					const modelTier = getModelTier(model);
+					if (Math.random() < modelTier.completionRate) completedSteps++;
+					if (Math.random() < modelTier.accuracy) correctActions++;
+					if (Math.random() < 0.3) {
+						stumbles++;
+						if (Math.random() < modelTier.recoveryRate) recoveredWithinUI++;
+					}
+					totalLatency += modelTier.baseLatencyMs + Math.floor(Math.random() * 500);
+					if (Math.random() > modelTier.accuracy) hallucinations++;
+				}
+			} else {
+				// ── Live API mode ─────────────────────────────────────
+				const config = resolveConfig({
+					model,
+					anthropicApiKey: api_key,
+					openaiApiKey: api_key,
 				});
-
-				// Simulate model performance (quality heuristic based on model tier)
-				const modelTier = getModelTier(model);
-				const stepSuccess = Math.random() < modelTier.completionRate;
-				if (stepSuccess) completedSteps++;
-
-				if (Math.random() < modelTier.accuracy) correctActions++;
-				if (Math.random() < 0.3) {
-					stumbles++;
-					if (Math.random() < modelTier.recoveryRate) recoveredWithinUI++;
+				const llmConfig = toLLMClientConfig(config);
+				const validationError = validateApiConfig(llmConfig);
+				if (validationError) {
+					console.error(pc.red(`  Skipping ${model}: ${validationError}`));
+					continue;
 				}
 
-				totalLatency += modelTier.baseLatencyMs + Math.floor(Math.random() * 500);
-				if (Math.random() > modelTier.accuracy) hallucinations++;
+				const client = createLLMClient(llmConfig);
+				const systemPrompt = buildAgentSystemPrompt(persona);
+
+				for (const [i, step] of steps.entries()) {
+					const pageSnapshot = `[Page: ${scenario.target_url}] (Step ${i + 1}: ${step.description ?? step.action})`;
+					const stepPrompt = buildStepPrompt(step, pageSnapshot, i, steps.length);
+
+					try {
+						const result = await client.chat(
+							[
+								{ role: "system", content: systemPrompt },
+								{ role: "user", content: stepPrompt },
+							],
+							{ maxTokens: 2048, temperature: 0.7 },
+						);
+
+						tracker.record({
+							personaId: pid, sessionId,
+							timestamp: new Date().toISOString(),
+							model: modelName, tokens: result.tokens,
+							costUSD: calculateCost(model, result.tokens),
+							step: step.description ?? step.action,
+							recoveryLevel: 0,
+						});
+
+						totalLatency += result.latencyMs;
+
+						// Parse LLM response to evaluate quality
+						const parsed = tryParseJson(result.content);
+						if (parsed) {
+							completedSteps++;
+							if (parsed.confidence >= 3) correctActions++;
+							if (parsed.stuck) {
+								stumbles++;
+								if (parsed.action?.type !== "give_up") recoveredWithinUI++;
+							}
+							if (parsed.missed_elements?.length > 3) hallucinations++;
+						} else {
+							// Response wasn't valid JSON — count as completed but lower accuracy
+							completedSteps++;
+						}
+
+						if (debug) {
+							console.log(pc.dim(`    Step ${i + 1}: ${result.latencyMs}ms, ${result.tokens.inputTokens}+${result.tokens.outputTokens} tokens`));
+						}
+					} catch (err) {
+						const message = err instanceof Error ? err.message : String(err);
+						console.error(pc.red(`    Step ${i + 1} failed: ${message}`));
+						stumbles++;
+					}
+				}
 			}
 
 			const taskCompletion = (completedSteps / steps.length) * 100;
@@ -253,6 +321,16 @@ function getModelTier(model: string): ModelTier {
 	if (model.includes("deepseek")) {
 		return { completionRate: 0.80, accuracy: 0.72, recoveryRate: 0.55, baseLatencyMs: 800 };
 	}
-	// Default: mid-tier
 	return { completionRate: 0.85, accuracy: 0.78, recoveryRate: 0.65, baseLatencyMs: 1000 };
+}
+
+function tryParseJson(text: string): Record<string, any> | null {
+	try {
+		// Extract JSON from markdown code blocks if present
+		const jsonMatch = text.match(/```(?:json)?\s*\n?([\s\S]*?)\n?```/);
+		const raw = jsonMatch ? jsonMatch[1]! : text;
+		return JSON.parse(raw);
+	} catch {
+		return null;
+	}
 }

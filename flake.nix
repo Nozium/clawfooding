@@ -18,6 +18,25 @@
         f: nixpkgs.lib.genAttrs systems (system: f nixpkgs.legacyPackages.${system});
     in
     {
+      packages = forAllSystems (pkgs: {
+        default = pkgs.buildNpmPackage {
+          pname = "clawfooding";
+          version = "0.1.0";
+          src = ./.;
+          npmDepsHash = "";
+          npmPackFlags = [ "--ignore-scripts" ];
+          buildPhase = ''
+            pnpm run build
+          '';
+          installPhase = ''
+            mkdir -p $out/bin
+            cp -r apps/clawfooding/dist/* $out/
+            chmod +x $out/index.js
+            ln -s $out/index.js $out/bin/clawfooding
+          '';
+        };
+      });
+
       devShells = forAllSystems (pkgs: {
         default = pkgs.mkShellNoCC {
           buildInputs = with pkgs; [

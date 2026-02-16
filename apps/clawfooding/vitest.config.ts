@@ -5,5 +5,6 @@ export default defineConfig({
 		watch: false,
 		includeSource: ["src/**/*.{js,ts}"],
 		globals: true,
+		passWithNoTests: true,
 	},
 });
