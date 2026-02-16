@@ -32,13 +32,13 @@
             nativeBuildInputs = [
               nodejs
               pnpm
-              pnpm.configHook
+              pkgs.pnpmConfigHook
               pkgs.makeWrapper
             ];
 
             # TODO: Run `nix build` once — it will fail and print the correct hash.
             #       Replace this placeholder with that sha256-... value.
-            pnpmDeps = pnpm.fetchDeps {
+            pnpmDeps = pkgs.fetchPnpmDeps {
               inherit (finalAttrs) pname version src;
               hash = pkgs.lib.fakeHash;
             };
