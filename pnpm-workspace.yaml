@@ -19,5 +19,3 @@ catalogs:
     vitest: ^3.0.0
   types:
     '@types/node': ^22.0.0
-
-managePackageManagerVersions: true
