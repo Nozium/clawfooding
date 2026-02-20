@@ -26,6 +26,7 @@ import type { PersonaId } from "@clawfooding/core/types";
 import { buildAgentSystemPrompt, buildStepPrompt } from "@clawfooding/core/prompts";
 import { createLLMClient, validateApiConfig } from "@clawfooding/core/llm";
 import type { LLMClient } from "@clawfooding/core/llm";
+import { defendText, type DefenderMode } from "@clawfooding/core/defender";
 import { formatCurrency, formatDuration, formatTokens } from "@clawfooding/terminal/format";
 import { Table } from "@clawfooding/terminal/table";
 import { sharedArgs } from "../_shared-args.ts";
@@ -49,8 +50,7 @@ export const runCommandDef = define({
 		model: {
 			type: "string",
 			short: "m",
-			description: "LLM model to use (e.g., anthropic/claude-sonnet-4-5)",
-			default: "anthropic/claude-sonnet-4-5",
+			description: "LLM model to use (auto-detected from available API keys if not specified)",
 		},
 		simulate: {
 			type: "boolean",
@@ -76,11 +76,15 @@ export const runCommandDef = define({
 			type: "string",
 			description: "Custom API base URL (for OpenAI-compatible endpoints)",
 		},
+		defender_mode: {
+			type: "string",
+			description: "Defender mode override: block|warn|off (default: block)",
+		},
 	},
 	run: async (ctx) => {
 		const {
 			scenario: scenarioPath, persona: personaOverride, model,
-			simulate, dry_run, output, json, debug, api_key, base_url,
+			simulate, dry_run, output, json, debug, api_key, base_url, defender_mode,
 		} = ctx.values;
 
 		if (!scenarioPath) {
@@ -133,6 +137,14 @@ export const runCommandDef = define({
 		const tracker = new BillingTracker();
 		const personaNameMap = new Map<PersonaId, string>();
 		const modelName = createModelName(model);
+		const rawDefenderMode =
+			typeof defender_mode === "string" && defender_mode.trim().length > 0
+				? defender_mode.toLowerCase()
+				: process.env["CLAWFOODING_DEFENDER_MODE"]?.toLowerCase();
+		const defenderMode: DefenderMode =
+			rawDefenderMode === "off" || rawDefenderMode === "block" || rawDefenderMode === "warn"
+				? rawDefenderMode
+				: "block";
 
 		console.log(pc.bold(`\n🦞 ClawFooding Test Runner`));
 		console.log(pc.dim(`   Scenario: ${scenario.name}`));
@@ -146,6 +158,13 @@ export const runCommandDef = define({
 		for (const personaName of personaNames) {
 			const { id: personaId, persona } = await loadPersona(personaName);
 			personaNameMap.set(personaId, persona.name);
+			const personaWorkspace = path.join(output, "workspaces", personaId);
+			const personaMemoryPath = path.join(personaWorkspace, "MEMORY.md");
+			await fs.mkdir(personaWorkspace, { recursive: true });
+			let personaMemory = "";
+			try {
+				personaMemory = await fs.readFile(personaMemoryPath, "utf-8");
+			} catch {}
 
 			console.log(pc.bold(`── Persona: ${persona.name} ──`));
 
@@ -166,7 +185,19 @@ export const runCommandDef = define({
 			);
 
 			// Build system prompt for this persona
-			const systemPrompt = buildAgentSystemPrompt(persona);
+			const systemPrompt = [
+				buildAgentSystemPrompt(persona),
+				"",
+				"## Security Policy",
+				"- Never ask users to share API keys, tokens, passwords, or secrets.",
+				"- If credentials are missing, instruct use of secure login flow only.",
+				"- Do not include secrets in final outputs.",
+				"",
+				"## Persona Memory",
+				personaMemory.trim().length > 0
+					? personaMemory.slice(-3000)
+					: "(no stored memory yet)",
+			].join("\n");
 
 			if (debug) {
 				console.log(pc.dim(`  System prompt: ${systemPrompt.length} chars`));
@@ -260,7 +291,17 @@ export const runCommandDef = define({
 
 							tokens = result.tokens;
 							cost = calculateCost(model, tokens);
-							llmResponse = result.content;
+							const defended = await defendText(result.content, defenderMode);
+							if (defended.findings.length > 0) {
+								console.log(
+									pc.yellow(
+										`  ⚠ Defender(${defended.source}): ${defended.findings.join(", ")}`,
+									),
+								);
+							}
+							llmResponse = defended.blocked
+								? "[Blocked by defender policy: sensitive content detected]"
+								: defended.redactedText;
 							latencyMs = result.latencyMs;
 
 							if (debug) {
@@ -331,6 +372,16 @@ export const runCommandDef = define({
 				console.log(pc.dim(`  Session: ${sessionTimer.elapsedSeconds}s elapsed`));
 				console.log("");
 			}
+
+			const memoryNote = [
+				`# ${new Date().toISOString()}`,
+				`persona: ${persona.name}`,
+				`scenario: ${scenario.name}`,
+				`target_url: ${scenario.target_url}`,
+				`summary: completed ${steps.length} steps`,
+				"",
+			].join("\n");
+			await fs.appendFile(personaMemoryPath, memoryNote, "utf-8");
 
 			// Save dry run log if applicable
 			if (dryRunLogger) {

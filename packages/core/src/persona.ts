@@ -1,4 +1,5 @@
 import * as fs from "node:fs/promises";
+import * as fsSync from "node:fs";
 import * as path from "node:path";
 import * as v from "valibot";
 import YAML from "yaml";
@@ -10,7 +11,19 @@ import {
 } from "./_types.ts";
 
 /** Default directory for built-in personas */
-const PERSONAS_DIR = path.resolve(import.meta.dirname ?? ".", "../../../personas");
+const PERSONAS_DIR = (() => {
+	const dirname = import.meta.dirname ?? ".";
+	// In bundled/production: personas are at ./personas
+	const bundled = path.resolve(dirname, "./personas");
+	// In source tree: personas are at ../../../personas
+	const source = path.resolve(dirname, "../../../personas");
+	// Prefer bundled location (Nix package), fallback to source tree (dev)
+	try {
+		const stat = fsSync.statSync(bundled);
+		if (stat.isDirectory()) return bundled;
+	} catch {}
+	return source;
+})();
 
 /**
  * Load a persona from a YAML file.

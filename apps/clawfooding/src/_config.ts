@@ -23,10 +23,44 @@ export interface ResolvedConfig {
 	apiKey: string | undefined;
 	anthropicApiKey: string | undefined;
 	openaiApiKey: string | undefined;
+	openaiOauthToken: string | undefined;
 	openaiBaseUrl: string | undefined;
 }
 
+/**
+ * Auto-detect the best default model based on available API keys.
+ * Priority: OpenAI/Codex OAuth → OpenAI API Key → Anthropic API Key
+ */
+function autoDetectModel(): string {
+	// Prefer OpenAI OAuth (Codex) if available
+	if (process.env["OPENAI_OAUTH_TOKEN"] || process.env["CODEX_OAUTH_TOKEN"]) {
+		return "openai/gpt-5.3-codex"; // Latest Codex agentic coding model
+	}
+	// OpenAI API key
+	if (process.env["OPENAI_API_KEY"] || process.env["CODEX_API_KEY"]) {
+		return "openai/gpt-4o";
+	}
+	// Anthropic API key
+	if (process.env["ANTHROPIC_API_KEY"]) {
+		return "anthropic/claude-sonnet-4-5";
+	}
+	// Fallback to Anthropic (will error later if key not set)
+	return "anthropic/claude-sonnet-4-5";
+}
+
 export function resolveConfig(overrides?: Partial<ResolvedConfig>): ResolvedConfig {
+	const openaiApiKey =
+		overrides?.openaiApiKey ??
+		process.env["OPENAI_API_KEY"] ??
+		process.env["CODEX_API_KEY"];
+	const openaiOauthToken =
+		overrides?.openaiOauthToken ??
+		process.env["OPENAI_OAUTH_TOKEN"] ??
+		process.env["CODEX_OAUTH_TOKEN"];
+	const anthropicApiKey =
+		overrides?.anthropicApiKey ??
+		process.env["ANTHROPIC_API_KEY"];
+
 	return {
 		targetUrl:
 			overrides?.targetUrl ??
@@ -34,7 +68,7 @@ export function resolveConfig(overrides?: Partial<ResolvedConfig>): ResolvedConf
 		model:
 			overrides?.model ??
 			process.env["CLAWFOODING_DEFAULT_MODEL"] ??
-			"anthropic/claude-sonnet-4-5",
+			autoDetectModel(),
 		provider:
 			overrides?.provider ??
 			(process.env["CLAWFOODING_PROVIDER"] as "anthropic" | "openai" | "auto" | undefined) ??
@@ -61,13 +95,9 @@ export function resolveConfig(overrides?: Partial<ResolvedConfig>): ResolvedConf
 		apiKey:
 			overrides?.apiKey ??
 			process.env["CLAWFOODING_API_KEY"],
-		anthropicApiKey:
-			overrides?.anthropicApiKey ??
-			process.env["ANTHROPIC_API_KEY"],
-		openaiApiKey:
-			overrides?.openaiApiKey ??
-			process.env["OPENAI_API_KEY"] ??
-			process.env["CODEX_API_KEY"],
+		anthropicApiKey,
+		openaiApiKey,
+		openaiOauthToken,
 		openaiBaseUrl:
 			overrides?.openaiBaseUrl ??
 			process.env["OPENAI_BASE_URL"],
@@ -80,6 +110,7 @@ export function toLLMClientConfig(config: ResolvedConfig): LLMClientConfig {
 		model: config.model,
 		anthropicApiKey: config.anthropicApiKey,
 		openaiApiKey: config.openaiApiKey,
+		openaiOauthToken: config.openaiOauthToken,
 		openaiBaseUrl: config.openaiBaseUrl,
 	};
 }
