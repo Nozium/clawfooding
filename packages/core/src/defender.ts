@@ -83,21 +83,47 @@ export async function defendText(text: string, mode: DefenderMode): Promise<Defe
 		};
 	}
 
-	// Optional external integration. If unavailable, builtin detector is used.
+	// Optional external integration via openclaw-defender.
+	// Uses Layer 1 (sync regex/keyword rules, <1ms) for injection detection.
+	// Secret redaction always runs via builtin regardless.
 	try {
 		const mod = (await import("openclaw-defender")) as Record<string, unknown>;
-		const candidate =
-			(typeof mod["defendText"] === "function" ? mod["defendText"] : null) ??
-			(typeof mod["scanText"] === "function" ? mod["scanText"] : null);
-		if (candidate) {
-			const raw = await (candidate as (value: string) => Promise<unknown> | unknown)(text);
-			const parsed = parseExternalDefenderResult(mode, text, raw);
-			if (parsed) {
-				return parsed;
-			}
+		const createScanner = mod["createScanner"] as
+			| ((config: Record<string, unknown>) => {
+					scanSync: (text: string) => {
+						blocked: boolean;
+						findings: Array<{
+							ruleId: string;
+							category: string;
+							severity: string;
+							message: string;
+						}>;
+					};
+			  })
+			| undefined;
+
+		if (typeof createScanner === "function") {
+			const scanner = createScanner({});
+			const result = scanner.scanSync(text);
+
+			// Builtin secret redaction always runs on top of openclaw-defender
+			const redactedText = redactSecrets(text);
+			const builtinFindings = detectFindings(text);
+			const externalFindings = result.findings.map(
+				(f) => `${f.category}:${f.ruleId} (${f.severity})`,
+			);
+			const allFindings = [...builtinFindings, ...externalFindings];
+
+			return {
+				mode,
+				source: "openclaw-defender",
+				redactedText,
+				blocked: decideBlocked(mode, allFindings) || (mode === "block" && result.blocked),
+				findings: allFindings,
+			};
 		}
 	} catch {
-		// Ignore and fallback to builtin
+		// Package not installed or load failed — fallback to builtin
 	}
 
 	const redactedText = redactSecrets(text);

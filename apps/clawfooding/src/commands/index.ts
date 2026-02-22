@@ -12,6 +12,15 @@ export async function run(): Promise<void> {
 	if (args[0] === CLI_NAME) {
 		args = args.slice(1);
 	}
+	// Normalize `--login codex` style into `--login=codex` so the value is not
+	// misinterpreted as a subcommand by the CLI parser.
+	for (let i = 0; i < args.length; i++) {
+		if (args[i] === "--login" && i + 1 < args.length) {
+			const value = args[i + 1];
+			args[i] = `--login=${value}`;
+			args.splice(i + 1, 1);
+		}
+	}
 
 	await cli(args, mainCommand, {
 		name: CLI_NAME,

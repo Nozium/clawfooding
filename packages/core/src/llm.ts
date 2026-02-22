@@ -26,6 +26,7 @@ export interface LLMClientConfig {
 	model: string;
 	anthropicApiKey?: string;
 	openaiApiKey?: string;
+	openaiOauthToken?: string;
 	openaiBaseUrl?: string;
 }
 
@@ -55,9 +56,22 @@ function detectProvider(config: LLMClientConfig): "anthropic" | "openai" {
 function stripModelPrefix(model: string): string {
 	if (model.startsWith("anthropic/")) return model.slice("anthropic/".length);
 	if (model.startsWith("openai/")) return model.slice("openai/".length);
+	if (model.startsWith("openai-codex/")) return model.slice("openai-codex/".length);
 	if (model.startsWith("google/")) return model.slice("google/".length);
 	if (model.startsWith("deepseek/")) return model.slice("deepseek/".length);
 	return model;
+}
+
+function resolveOpenAICredential(config: LLMClientConfig): string | null {
+	return (
+		config.openaiApiKey ??
+		config.openaiOauthToken ??
+		process.env["OPENAI_API_KEY"] ??
+		process.env["CODEX_API_KEY"] ??
+		process.env["OPENAI_OAUTH_TOKEN"] ??
+		process.env["CODEX_OAUTH_TOKEN"] ??
+		null
+	);
 }
 
 // ── Anthropic Client ──────────────────────────────────────────────────────
@@ -110,9 +124,9 @@ class AnthropicLLMClient implements LLMClient {
 				inputTokens: response.usage.input_tokens,
 				outputTokens: response.usage.output_tokens,
 				cacheCreationInputTokens:
-					(response.usage as Record<string, number>)["cache_creation_input_tokens"] ?? 0,
+					(response.usage as unknown as Record<string, number>)["cache_creation_input_tokens"] ?? 0,
 				cacheReadInputTokens:
-					(response.usage as Record<string, number>)["cache_read_input_tokens"] ?? 0,
+					(response.usage as unknown as Record<string, number>)["cache_read_input_tokens"] ?? 0,
 			},
 			model: response.model,
 			latencyMs: Math.round(latencyMs),
@@ -127,14 +141,12 @@ class OpenAILLMClient implements LLMClient {
 	private model: string;
 
 	constructor(config: LLMClientConfig) {
-		const apiKey =
-			config.openaiApiKey ??
-			process.env["OPENAI_API_KEY"] ??
-			process.env["CODEX_API_KEY"];
+		const apiKey = resolveOpenAICredential(config);
 		if (!apiKey) {
 			throw new Error(
 				"OPENAI_API_KEY is required. Set it via environment variable or --api-key flag.\n" +
-				"For Codex CLI: use CODEX_API_KEY or OPENAI_API_KEY.\n" +
+				"For Codex/ChatGPT OAuth: use OPENAI_OAUTH_TOKEN or CODEX_OAUTH_TOKEN.\n" +
+				"For API keys: use OPENAI_API_KEY or CODEX_API_KEY.\n" +
 				"For local models: set OPENAI_BASE_URL (e.g., http://localhost:11434/v1).",
 			);
 		}
@@ -206,12 +218,9 @@ export function validateApiConfig(config: LLMClientConfig): string | null {
 	}
 
 	if (provider === "openai") {
-		const key =
-			config.openaiApiKey ??
-			process.env["OPENAI_API_KEY"] ??
-			process.env["CODEX_API_KEY"];
+		const key = resolveOpenAICredential(config);
 		if (!key) {
-			return "OPENAI_API_KEY (or CODEX_API_KEY) is not set. Set it via environment variable or use --simulate for offline mode.";
+			return "OpenAI credential is not set. Use OPENAI_API_KEY/CODEX_API_KEY or OPENAI_OAUTH_TOKEN/CODEX_OAUTH_TOKEN, or use --simulate for offline mode.";
 		}
 	}
 
@@ -244,6 +253,7 @@ if (import.meta.vitest) {
 		it("strips known prefixes", () => {
 			expect(stripModelPrefix("anthropic/claude-sonnet-4-5")).toBe("claude-sonnet-4-5");
 			expect(stripModelPrefix("openai/gpt-4o")).toBe("gpt-4o");
+			expect(stripModelPrefix("openai-codex/gpt-5.3-codex")).toBe("gpt-5.3-codex");
 			expect(stripModelPrefix("gpt-4o")).toBe("gpt-4o");
 		});
 	});
@@ -263,6 +273,27 @@ if (import.meta.vitest) {
 				anthropicApiKey: "sk-ant-test",
 			});
 			expect(result).toBeNull();
+		});
+
+		it("accepts OpenAI OAuth token from env", () => {
+			const originalApi = process.env["OPENAI_API_KEY"];
+			const originalCodex = process.env["CODEX_API_KEY"];
+			const originalOauth = process.env["OPENAI_OAUTH_TOKEN"];
+			delete process.env["OPENAI_API_KEY"];
+			delete process.env["CODEX_API_KEY"];
+			process.env["OPENAI_OAUTH_TOKEN"] = "oauth-test";
+
+			const result = validateApiConfig({
+				model: "openai-codex/gpt-5.3-codex",
+			});
+			expect(result).toBeNull();
+
+			if (originalApi) process.env["OPENAI_API_KEY"] = originalApi;
+			else delete process.env["OPENAI_API_KEY"];
+			if (originalCodex) process.env["CODEX_API_KEY"] = originalCodex;
+			else delete process.env["CODEX_API_KEY"];
+			if (originalOauth) process.env["OPENAI_OAUTH_TOKEN"] = originalOauth;
+			else delete process.env["OPENAI_OAUTH_TOKEN"];
 		});
 	});
 }

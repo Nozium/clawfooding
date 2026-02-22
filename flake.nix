@@ -36,11 +36,15 @@
               pkgs.makeWrapper
             ];
 
+            buildInputs = [
+              pkgs.playwright-driver.browsers
+            ];
+
             # TODO: Run `nix build` once — it will fail and print the correct hash.
             #       Replace this placeholder with that sha256-... value.
             pnpmDeps = pkgs.fetchPnpmDeps {
               inherit (finalAttrs) pname version src;
-              hash = pkgs.lib.fakeHash;
+              hash = "sha256-Loim/LoCvthhiNT0Q9hqgCB4wuqwXAuxVKKkfOhYsso=";
               fetcherVersion = 2;
             };
 
@@ -61,10 +65,19 @@
               cp -r personas $out/lib/clawfooding/personas
               cp -r examples $out/lib/clawfooding/examples
 
-              # Create wrapper that ensures node is on PATH
+              # Copy playwright node module for dynamic import
+              mkdir -p $out/lib/clawfooding/node_modules
+              if [ -d "node_modules/playwright" ]; then
+                cp -r node_modules/playwright $out/lib/clawfooding/node_modules/
+              fi
+
+              # Create wrapper that ensures node is on PATH and sets Playwright browser path
               mkdir -p $out/bin
               makeWrapper ${nodejs}/bin/node $out/bin/clawfooding \
-                --add-flags "$out/lib/clawfooding/index.mjs"
+                --add-flags "$out/lib/clawfooding/index.mjs" \
+                --set PLAYWRIGHT_BROWSERS_PATH "${pkgs.playwright-driver.browsers}" \
+                --set PLAYWRIGHT_SKIP_BROWSER_DOWNLOAD "1" \
+                --set NODE_PATH "$out/lib/clawfooding/node_modules"
 
               runHook postInstall
             '';

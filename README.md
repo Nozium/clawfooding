@@ -151,7 +151,7 @@ The `feelfree` command launches a headless Chromium browser via [Playwright](htt
 
 - **Google Terms of Service**: Automated scraping of Google Search results may violate Google's ToS. Use `--simulate` for development and testing to avoid live requests.
 - **Fragile DOM selectors**: Google changes its HTML structure frequently. The `div#search .g` selectors used for result extraction may break without notice. If no results are returned, check the selectors in `apps/clawfooding/src/commands/feelfree.ts`.
-- **Playwright is an optional dependency**: It is not bundled with clawfooding. Install it separately if you need live browser mode: `pnpm add -D playwright && npx playwright install chromium`. Without it, `feelfree` exits with a clear error message.
+- **Playwright is an optional dependency**: The Nix package does NOT include Playwright. Use `--simulate` mode when running via `nix profile install`. For real browser mode, use the development environment: `pnpm install && bun apps/clawfooding/src/index.ts feelfree ...`
 - **Network requests**: Live mode sends real HTTP requests to Google from your IP address. Rate-limited or blocked IPs will return empty results.
 
 ### Billing Log Privacy

@@ -6,7 +6,7 @@ import * as v from "valibot";
 import { BillingTracker, calculateCost } from "@clawfooding/core/billing";
 import { loadPersona } from "@clawfooding/core/persona";
 import { cognitiveLoadScore } from "@clawfooding/core/cognitive";
-import { buildAgentSystemPrompt, buildStepPrompt, buildEvaluationPrompt } from "@clawfooding/core/prompts";
+import { buildAgentSystemPrompt, buildStepPrompt } from "@clawfooding/core/prompts";
 import { createLLMClient, validateApiConfig } from "@clawfooding/core/llm";
 import type { LLMClient } from "@clawfooding/core/llm";
 import { scenarioSchema, createModelName, createSessionId } from "@clawfooding/core/types";
@@ -59,7 +59,7 @@ export const benchCommandDef = define({
 		const scenario = v.parse(scenarioSchema, YAML.parse(scenarioRaw) as unknown);
 
 		// Parse models
-		const models = (modelsStr ?? "").split(",").map((m) => m.trim()).filter(Boolean);
+		const models = (modelsStr ?? "").split(",").map((m: string) => m.trim()).filter(Boolean);
 
 		if (models.length === 0) {
 			console.error(pc.red("Error: No models specified"));

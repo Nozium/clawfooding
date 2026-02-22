@@ -44,7 +44,6 @@ export const billingCommandDef = define({
 		const billingDir = dir ?? DEFAULT_BILLING_DIR;
 
 		// ── Load billing records ─────────────────────────────────────────
-		const tracker = new BillingTracker();
 		let files: string[];
 
 		try {
@@ -61,12 +60,49 @@ export const billingCommandDef = define({
 			process.exit(1);
 		}
 
+		let allRecords: PersonaBillingRecord[] = [];
 		for (const file of files) {
 			const content = await fs.readFile(path.join(billingDir, file), "utf-8");
-			tracker.importJsonl(content);
+			const lines = content.split("\n").filter((l) => l.trim().length > 0);
+			for (const line of lines) {
+				try {
+					allRecords.push(JSON.parse(line) as PersonaBillingRecord);
+				} catch {
+					// skip malformed lines
+				}
+			}
 		}
 
-		console.log(pc.dim(`Loaded ${tracker.recordCount} billing records from ${files.length} files\n`));
+		// ── Apply filters ────────────────────────────────────────────────
+		const sinceDate = typeof since === "string" && since.trim() ? since.trim().slice(0, 10) : null;
+		const untilDate = typeof until === "string" && until.trim() ? until.trim().slice(0, 10) : null;
+		const personaFilter = typeof persona === "string" && persona.trim() ? persona.trim() : null;
+
+		if (sinceDate || untilDate || personaFilter) {
+			allRecords = allRecords.filter((r) => {
+				const day = r.timestamp.slice(0, 10);
+				if (sinceDate && day < sinceDate) return false;
+				if (untilDate && day > untilDate) return false;
+				if (personaFilter && String(r.personaId) !== personaFilter) return false;
+				return true;
+			});
+		}
+
+		const tracker = new BillingTracker();
+		if (allRecords.length > 0) {
+			tracker.importJsonl(allRecords.map((r) => JSON.stringify(r)).join("\n"));
+		}
+
+		if (sinceDate || untilDate || personaFilter) {
+			const filterDesc = [
+				sinceDate ? `since=${sinceDate}` : null,
+				untilDate ? `until=${untilDate}` : null,
+				personaFilter ? `persona=${personaFilter}` : null,
+			].filter(Boolean).join(", ");
+			console.log(pc.dim(`Loaded ${tracker.recordCount} billing records from ${files.length} files (filter: ${filterDesc})\n`));
+		} else {
+			console.log(pc.dim(`Loaded ${tracker.recordCount} billing records from ${files.length} files\n`));
+		}
 
 		// ── Generate report ──────────────────────────────────────────────
 		const personaNames = new Map<PersonaId, string>();

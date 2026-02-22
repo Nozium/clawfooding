@@ -32,17 +32,20 @@
 		"clean": "rm -rf dist"
 	},
 	"devDependencies": {
+		"@anthropic-ai/sdk": "catalog:runtime",
 		"@clawfooding/core": "workspace:*",
 		"@clawfooding/terminal": "workspace:*",
-		"@anthropic-ai/sdk": "catalog:runtime",
-		"openai": "catalog:runtime",
+		"@types/node": "catalog:types",
 		"gunshi": "catalog:runtime",
-		"valibot": "catalog:runtime",
-		"yaml": "catalog:runtime",
+		"openai": "catalog:runtime",
 		"picocolors": "catalog:runtime",
 		"tsdown": "catalog:build",
 		"typescript": "catalog:build",
+		"valibot": "catalog:runtime",
 		"vitest": "catalog:testing",
-		"@types/node": "catalog:types"
+		"yaml": "catalog:runtime"
+	},
+	"optionalDependencies": {
+		"playwright": "^1.58.2"
 	}
 }
