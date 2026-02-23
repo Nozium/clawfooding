@@ -76,7 +76,11 @@ async function ensurePlaywrightChromium(): Promise<{
 }> {
 	let mod: Record<string, unknown>;
 	try {
-		mod = (await import("playwright")) as unknown as Record<string, unknown>;
+		// Use createRequire so NODE_PATH (set by Nix wrapper) is respected.
+		// ESM dynamic import() ignores NODE_PATH; CJS require() does not.
+		const { createRequire } = await import("node:module");
+		const req = createRequire(import.meta.url);
+		mod = req("playwright") as unknown as Record<string, unknown>;
 	} catch {
 		throw new Error(
 			'Playwright is required for real browser mode. Install it in this environment and retry (e.g. "pnpm add -D playwright").',
