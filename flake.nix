@@ -99,14 +99,21 @@
       devShells = forAllSystems (pkgs: {
         default = pkgs.mkShellNoCC {
           buildInputs = with pkgs; [
+            nodejs_22
             pnpm_10
             bun
             jq
             git
             gh
+            playwright-driver.browsers
           ];
 
           shellHook = ''
+            export PATH="node_modules/.bin:$PATH"
+            export PLAYWRIGHT_BROWSERS_PATH=${pkgs.playwright-driver.browsers}
+            export PLAYWRIGHT_SKIP_BROWSER_DOWNLOAD=true
+            export PLAYWRIGHT_SKIP_VALIDATE_HOST_REQUIREMENTS=true
+
             if [ ! -f node_modules/.pnpm/lock.yaml ] || [ pnpm-lock.yaml -nt node_modules/.pnpm/lock.yaml ]; then
               pnpm install --frozen-lockfile 2>/dev/null || pnpm install
             fi
