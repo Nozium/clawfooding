@@ -46,6 +46,6 @@
 		"yaml": "catalog:runtime"
 	},
 	"optionalDependencies": {
-		"playwright": "^1.58.2"
+		"playwright": "1.57.0"
 	}
 }

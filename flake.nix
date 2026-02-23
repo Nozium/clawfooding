@@ -65,10 +65,17 @@
               cp -r personas $out/lib/clawfooding/personas
               cp -r examples $out/lib/clawfooding/examples
 
-              # Copy playwright node module for dynamic import
+              # Copy playwright + playwright-core from pnpm virtual store for dynamic import
               mkdir -p $out/lib/clawfooding/node_modules
-              if [ -d "node_modules/playwright" ]; then
-                cp -r node_modules/playwright $out/lib/clawfooding/node_modules/
+              PW_STORE=$(echo node_modules/.pnpm/playwright@*/node_modules | tr ' ' '\n' | grep playwright@ | head -1)
+              PWC_STORE=$(echo node_modules/.pnpm/playwright-core@*/node_modules | tr ' ' '\n' | grep playwright-core@ | head -1)
+              if [ -n "$PW_STORE" ] && [ -d "$PW_STORE/playwright" ]; then
+                cp -rL "$PW_STORE/playwright" $out/lib/clawfooding/node_modules/playwright
+                cp -rL "$PWC_STORE/playwright-core" $out/lib/clawfooding/node_modules/playwright-core
+                # playwright requires playwright-core in its own node_modules
+                mkdir -p $out/lib/clawfooding/node_modules/playwright/node_modules
+                ln -s $out/lib/clawfooding/node_modules/playwright-core \
+                  $out/lib/clawfooding/node_modules/playwright/node_modules/playwright-core
               fi
 
               # Create wrapper that ensures node is on PATH and sets Playwright browser path
