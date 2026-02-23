@@ -44,7 +44,7 @@
             #       Replace this placeholder with that sha256-... value.
             pnpmDeps = pkgs.fetchPnpmDeps {
               inherit (finalAttrs) pname version src;
-              hash = "sha256-Loim/LoCvthhiNT0Q9hqgCB4wuqwXAuxVKKkfOhYsso=";
+              hash = "sha256-YFuIetv5bg2MKVdhdvCvVLUyxwzShcyhv3HsQC8YFEE=";
               fetcherVersion = 2;
             };
 
