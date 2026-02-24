@@ -94,31 +94,41 @@ async function ensurePlaywrightChromium(): Promise<{
 	return { browser };
 }
 
-async function googleSearch(browser: { newPage: () => Promise<any> }, query: string): Promise<SearchHit[]> {
+async function scrapeUrl(browser: { newPage: () => Promise<any> }, targetUrl: string, goal: string): Promise<SearchHit[]> {
 	const page = await browser.newPage();
 	try {
-		const url = `https://www.google.com/search?q=${encodeURIComponent(query)}&hl=en&num=10`;
-		await page.goto(url, { waitUntil: "domcontentloaded", timeout: 30_000 });
-		await page.waitForTimeout(1500);
-		const hits = (await page.evaluate((q: string) => {
-			const cards = Array.from(document.querySelectorAll("div#search .g"));
+		await page.goto(targetUrl, { waitUntil: "domcontentloaded", timeout: 30_000 });
+		await page.waitForTimeout(1000);
+		const hits = (await page.evaluate((args: { url: string; goal: string }) => {
+			// Extract headings, paragraphs, and links as evidence
 			const out: Array<{ query: string; title: string; url: string; snippet: string }> = [];
-			for (const card of cards) {
-				const link = card.querySelector("a");
-				const titleEl = card.querySelector("h3");
-				const snippetEl =
-					card.querySelector("div.VwiC3b") ??
-					card.querySelector("span.aCOpRe") ??
-					card.querySelector("div[data-sncf]");
-				const title = (titleEl?.textContent ?? "").trim();
-				const href = (link?.getAttribute("href") ?? "").trim();
-				const snippet = (snippetEl?.textContent ?? "").trim();
-				if (!title || !href) continue;
-				out.push({ query: q, title, url: href, snippet });
-				if (out.length >= 5) break;
+			const pageTitle = document.title || document.querySelector("h1")?.textContent || "";
+
+			// Main content: headings + nearby text
+			const headings = Array.from(document.querySelectorAll("h1, h2, h3"));
+			for (const h of headings) {
+				const title = (h.textContent ?? "").trim();
+				if (!title) continue;
+				// Grab following sibling text as snippet
+				const next = h.nextElementSibling;
+				const snippet = (next?.textContent ?? "").trim().slice(0, 200);
+				out.push({ query: args.goal, title, url: args.url, snippet });
+				if (out.length >= 9) break;
 			}
+
+			// Fallback: grab paragraphs if no headings
+			if (out.length === 0) {
+				const paras = Array.from(document.querySelectorAll("p"));
+				for (const p of paras) {
+					const text = (p.textContent ?? "").trim();
+					if (text.length < 20) continue;
+					out.push({ query: args.goal, title: pageTitle, url: args.url, snippet: text.slice(0, 200) });
+					if (out.length >= 9) break;
+				}
+			}
+
 			return out;
-		}, query)) as SearchHit[];
+		}, { url: targetUrl, goal })) as SearchHit[];
 		return hits;
 	} finally {
 		await page.close();
@@ -219,10 +229,7 @@ export const feelfreeCommandDef = define({
 						},
 					]);
 				} else {
-					for (const q of queries) {
-						const result = await googleSearch(browserWrap.browser, q);
-						hits.push(...result);
-					}
+					hits = await scrapeUrl(browserWrap.browser, String(url), String(goal));
 				}
 
 				let summary = summarizeFromHitsFallback(persona, goal, hits);
@@ -243,7 +250,7 @@ export const feelfreeCommandDef = define({
 						`Target URL: ${url}`,
 						`Goal: ${goal}`,
 						"",
-						"Evidence (Google search results):",
+						"Evidence (page content extracted from the URL):",
 						JSON.stringify(hits, null, 2),
 						"",
 						"Create a persona-specific report with:",
