@@ -203,7 +203,6 @@ class CodexLLMClient implements LLMClient {
 			include: ["reasoning.encrypted_content"],
 			tool_choice: "auto",
 			parallel_tool_calls: true,
-			...(options?.temperature !== undefined ? { temperature: options.temperature } : {}),
 		});
 
 		// Headers from pi-ai's buildHeaders() — originator:pi is critical for Cloudflare
