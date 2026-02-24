@@ -111,9 +111,63 @@ function readCodexAccessToken(config: LLMClientConfig): string | null {
 }
 
 // ── Codex Client (chatgpt.com/backend-api/codex/responses) ───────────────
+//
+// Based on pi-ai's openai-codex-responses.js provider (openclaw dependency).
+// Key requirements vs standard OpenAI API:
+//   - Endpoint: chatgpt.com/backend-api/codex/responses
+//   - Headers: chatgpt-account-id (from JWT), OpenAI-Beta, originator: pi
+//   - Response: SSE streaming (stream: true required)
+//   - store: false required
+
+const JWT_CLAIM_PATH = "https://api.openai.com/auth";
+
+function extractCodexAccountId(token: string): string {
+	try {
+		const parts = token.split(".");
+		if (parts.length !== 3) throw new Error("not a JWT");
+		const payload = JSON.parse(
+			Buffer.from(parts[1]!, "base64url").toString("utf-8"),
+		) as Record<string, unknown>;
+		const auth = payload[JWT_CLAIM_PATH] as Record<string, unknown> | undefined;
+		const accountId = auth?.["chatgpt_account_id"];
+		if (typeof accountId !== "string" || !accountId) throw new Error("no account_id");
+		return accountId;
+	} catch {
+		throw new Error(
+			"Failed to extract chatgpt_account_id from Codex access token. " +
+			"Re-login via Codex CLI (`codex login`).",
+		);
+	}
+}
+
+async function* parseCodexSSE(body: ReadableStream<Uint8Array>): AsyncGenerator<Record<string, unknown>> {
+	const reader = body.getReader();
+	const decoder = new TextDecoder();
+	let buffer = "";
+	while (true) {
+		const { done, value } = await reader.read();
+		if (done) break;
+		buffer += decoder.decode(value, { stream: true });
+		let idx = buffer.indexOf("\n\n");
+		while (idx !== -1) {
+			const chunk = buffer.slice(0, idx);
+			buffer = buffer.slice(idx + 2);
+			const data = chunk
+				.split("\n")
+				.filter((l) => l.startsWith("data:"))
+				.map((l) => l.slice(5).trim())
+				.join("");
+			if (data && data !== "[DONE]") {
+				try { yield JSON.parse(data) as Record<string, unknown>; } catch { /* skip malformed */ }
+			}
+			idx = buffer.indexOf("\n\n");
+		}
+	}
+}
 
 class CodexLLMClient implements LLMClient {
-	private client: OpenAI;
+	private token: string;
+	private accountId: string;
 	private model: string;
 
 	constructor(config: LLMClientConfig) {
@@ -124,10 +178,8 @@ class CodexLLMClient implements LLMClient {
 				"Log in via Codex CLI (`codex login`) or set OPENAI_OAUTH_TOKEN / CODEX_OAUTH_TOKEN.",
 			);
 		}
-		this.client = new OpenAI({
-			apiKey: token,
-			baseURL: CODEX_BASE_URL,
-		});
+		this.token = token;
+		this.accountId = extractCodexAccountId(token);
 		this.model = stripModelPrefix(config.model);
 	}
 
@@ -136,53 +188,79 @@ class CodexLLMClient implements LLMClient {
 		const nonSystemMsgs = messages.filter((m) => m.role !== "system");
 
 		const input = nonSystemMsgs.map((m) => ({
-			type: "message" as const,
-			role: m.role as "user" | "assistant",
-			content: [{ type: "input_text" as const, text: m.content }],
+			type: "message",
+			role: m.role,
+			content: [{ type: "input_text", text: m.content }],
 		}));
+
+		const body = JSON.stringify({
+			model: this.model,
+			store: false,
+			stream: true,
+			instructions: systemMsg?.content,
+			input,
+			text: { verbosity: "medium" },
+			include: ["reasoning.encrypted_content"],
+			tool_choice: "auto",
+			parallel_tool_calls: true,
+			...(options?.temperature !== undefined ? { temperature: options.temperature } : {}),
+		});
+
+		// Headers from pi-ai's buildHeaders() — originator:pi is critical for Cloudflare
+		const platform = `${os.platform()} ${os.release()}; ${os.arch()}`;
+		const headers: Record<string, string> = {
+			"Authorization": `Bearer ${this.token}`,
+			"chatgpt-account-id": this.accountId,
+			"OpenAI-Beta": "responses=experimental",
+			"originator": "pi",
+			"User-Agent": `pi (${platform})`,
+			"accept": "text/event-stream",
+			"content-type": "application/json",
+		};
 
 		const start = performance.now();
 
-		// Uses OpenAI Responses API; store=false is required for Codex endpoint.
-		const response = await (this.client.responses as unknown as {
-			create: (params: Record<string, unknown>) => Promise<Record<string, unknown>>;
-		}).create({
-			model: this.model,
-			instructions: systemMsg?.content,
-			input,
-			store: false,
-			max_output_tokens: options?.maxTokens ?? 4096,
-			temperature: options?.temperature ?? 0.7,
+		const resp = await fetch(`${CODEX_BASE_URL}/codex/responses`, {
+			method: "POST",
+			headers,
+			body,
 		});
 
-		const latencyMs = performance.now() - start;
-
-		// Extract text from response (output_text shorthand or output array)
-		let content = "";
-		if (typeof response["output_text"] === "string") {
-			content = response["output_text"];
-		} else {
-			const output = response["output"] as Array<Record<string, unknown>> | undefined;
-			content = output
-				?.flatMap((item) => {
-					const parts = item["content"] as Array<Record<string, unknown>> | undefined;
-					return parts?.map((p) => (typeof p["text"] === "string" ? p["text"] : "")) ?? [];
-				})
-				.join("") ?? "";
+		if (!resp.ok || !resp.body) {
+			const text = await resp.text().catch(() => "");
+			throw new Error(`Codex API error ${resp.status}: ${text.slice(0, 300)}`);
 		}
 
-		const usage = response["usage"] as Record<string, number> | undefined;
+		// Collect SSE stream into full text + usage
+		let content = "";
+		let inputTokens = 0;
+		let outputTokens = 0;
+		let responseModel = this.model;
+
+		for await (const event of parseCodexSSE(resp.body)) {
+			const type = event["type"] as string | undefined;
+			if (type === "response.output_text.delta") {
+				const delta = event["delta"] as string | undefined;
+				if (delta) content += delta;
+			} else if (type === "response.completed" || type === "response.done") {
+				const r = event["response"] as Record<string, unknown> | undefined;
+				const usage = r?.["usage"] as Record<string, number> | undefined;
+				if (usage) {
+					inputTokens = usage["input_tokens"] ?? 0;
+					outputTokens = usage["output_tokens"] ?? 0;
+				}
+				if (typeof r?.["model"] === "string") responseModel = r["model"] as string;
+			} else if (type === "error" || type === "response.failed") {
+				const msg = (event["message"] ?? event["response"]) as unknown;
+				throw new Error(`Codex stream error: ${JSON.stringify(msg)}`);
+			}
+		}
 
 		return {
 			content,
-			tokens: {
-				inputTokens: usage?.["input_tokens"] ?? 0,
-				outputTokens: usage?.["output_tokens"] ?? 0,
-				cacheCreationInputTokens: 0,
-				cacheReadInputTokens: 0,
-			},
-			model: (response["model"] as string | undefined) ?? this.model,
-			latencyMs: Math.round(latencyMs),
+			tokens: { inputTokens, outputTokens, cacheCreationInputTokens: 0, cacheReadInputTokens: 0 },
+			model: responseModel,
+			latencyMs: Math.round(performance.now() - start),
 		};
 	}
 }
