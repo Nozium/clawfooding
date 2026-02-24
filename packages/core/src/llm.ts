@@ -1,3 +1,6 @@
+import * as fs from "node:fs";
+import * as os from "node:os";
+import * as path from "node:path";
 import Anthropic from "@anthropic-ai/sdk";
 import OpenAI from "openai";
 import type { TokenUsage } from "./_types.ts";
@@ -22,7 +25,7 @@ export interface ChatResult {
 }
 
 export interface LLMClientConfig {
-	provider?: "anthropic" | "openai" | "auto";
+	provider?: "anthropic" | "openai" | "codex" | "auto";
 	model: string;
 	anthropicApiKey?: string;
 	openaiApiKey?: string;
@@ -36,12 +39,15 @@ export interface LLMClient {
 
 // ── Provider Detection ────────────────────────────────────────────────────
 
-function detectProvider(config: LLMClientConfig): "anthropic" | "openai" {
+function detectProvider(config: LLMClientConfig): "anthropic" | "openai" | "codex" {
 	if (config.provider && config.provider !== "auto") {
 		return config.provider;
 	}
 
 	const model = config.model.toLowerCase();
+	if (model.startsWith("openai-codex/")) {
+		return "codex";
+	}
 	if (
 		model.startsWith("anthropic/") ||
 		model.startsWith("claude-") ||
@@ -72,6 +78,113 @@ function resolveOpenAICredential(config: LLMClientConfig): string | null {
 		process.env["CODEX_OAUTH_TOKEN"] ??
 		null
 	);
+}
+
+// ── Codex OAuth ───────────────────────────────────────────────────────────
+
+const CODEX_BASE_URL = "https://chatgpt.com/backend-api";
+
+function resolveCodexHome(): string {
+	const configured = process.env["CODEX_HOME"];
+	return configured ? path.resolve(configured) : path.join(os.homedir(), ".codex");
+}
+
+function readCodexAccessToken(config: LLMClientConfig): string | null {
+	// Explicit env vars take priority
+	const fromEnv =
+		config.openaiOauthToken ??
+		process.env["OPENAI_OAUTH_TOKEN"] ??
+		process.env["CODEX_OAUTH_TOKEN"];
+	if (fromEnv) return fromEnv;
+
+	// Fall back to ~/.codex/auth.json (same structure as openclaw cli-credentials.ts)
+	try {
+		const authPath = path.join(resolveCodexHome(), "auth.json");
+		const raw = JSON.parse(fs.readFileSync(authPath, "utf-8")) as Record<string, unknown>;
+		const tokens = raw["tokens"] as Record<string, unknown> | undefined;
+		const token = tokens?.["access_token"];
+		if (typeof token === "string" && token) return token;
+	} catch {
+		// auth.json not found or malformed — fall through
+	}
+	return null;
+}
+
+// ── Codex Client (chatgpt.com/backend-api/codex/responses) ───────────────
+
+class CodexLLMClient implements LLMClient {
+	private client: OpenAI;
+	private model: string;
+
+	constructor(config: LLMClientConfig) {
+		const token = readCodexAccessToken(config);
+		if (!token) {
+			throw new Error(
+				"Codex OAuth token is not available.\n" +
+				"Log in via Codex CLI (`codex login`) or set OPENAI_OAUTH_TOKEN / CODEX_OAUTH_TOKEN.",
+			);
+		}
+		this.client = new OpenAI({
+			apiKey: token,
+			baseURL: CODEX_BASE_URL,
+		});
+		this.model = stripModelPrefix(config.model);
+	}
+
+	async chat(messages: LLMMessage[], options?: ChatOptions): Promise<ChatResult> {
+		const systemMsg = messages.find((m) => m.role === "system");
+		const nonSystemMsgs = messages.filter((m) => m.role !== "system");
+
+		const input = nonSystemMsgs.map((m) => ({
+			type: "message" as const,
+			role: m.role as "user" | "assistant",
+			content: [{ type: "input_text" as const, text: m.content }],
+		}));
+
+		const start = performance.now();
+
+		// Uses OpenAI Responses API; store=false is required for Codex endpoint.
+		const response = await (this.client.responses as unknown as {
+			create: (params: Record<string, unknown>) => Promise<Record<string, unknown>>;
+		}).create({
+			model: this.model,
+			instructions: systemMsg?.content,
+			input,
+			store: false,
+			max_output_tokens: options?.maxTokens ?? 4096,
+			temperature: options?.temperature ?? 0.7,
+		});
+
+		const latencyMs = performance.now() - start;
+
+		// Extract text from response (output_text shorthand or output array)
+		let content = "";
+		if (typeof response["output_text"] === "string") {
+			content = response["output_text"];
+		} else {
+			const output = response["output"] as Array<Record<string, unknown>> | undefined;
+			content = output
+				?.flatMap((item) => {
+					const parts = item["content"] as Array<Record<string, unknown>> | undefined;
+					return parts?.map((p) => (typeof p["text"] === "string" ? p["text"] : "")) ?? [];
+				})
+				.join("") ?? "";
+		}
+
+		const usage = response["usage"] as Record<string, number> | undefined;
+
+		return {
+			content,
+			tokens: {
+				inputTokens: usage?.["input_tokens"] ?? 0,
+				outputTokens: usage?.["output_tokens"] ?? 0,
+				cacheCreationInputTokens: 0,
+				cacheReadInputTokens: 0,
+			},
+			model: (response["model"] as string | undefined) ?? this.model,
+			latencyMs: Math.round(latencyMs),
+		};
+	}
 }
 
 // ── Anthropic Client ──────────────────────────────────────────────────────
@@ -198,6 +311,8 @@ export function createLLMClient(config: LLMClientConfig): LLMClient {
 	switch (provider) {
 		case "anthropic":
 			return new AnthropicLLMClient(config);
+		case "codex":
+			return new CodexLLMClient(config);
 		case "openai":
 			return new OpenAILLMClient(config);
 	}
@@ -214,6 +329,13 @@ export function validateApiConfig(config: LLMClientConfig): string | null {
 		const key = config.anthropicApiKey ?? process.env["ANTHROPIC_API_KEY"];
 		if (!key) {
 			return "ANTHROPIC_API_KEY is not set. Set it via environment variable or use --simulate for offline mode.";
+		}
+	}
+
+	if (provider === "codex") {
+		const token = readCodexAccessToken(config);
+		if (!token) {
+			return "Codex OAuth token is not available. Log in via Codex CLI or set OPENAI_OAUTH_TOKEN / CODEX_OAUTH_TOKEN.";
 		}
 	}
 

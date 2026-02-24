@@ -8,6 +8,9 @@
  * 4. Defaults
  */
 
+import * as fs from "node:fs";
+import * as os from "node:os";
+import * as path from "node:path";
 import type { LLMClientConfig } from "@clawfooding/core/llm";
 
 export interface ResolvedConfig {
@@ -27,14 +30,32 @@ export interface ResolvedConfig {
 	openaiBaseUrl: string | undefined;
 }
 
+function hasCodexAuthJson(): boolean {
+	try {
+		const codexHome = process.env["CODEX_HOME"]
+			? path.resolve(process.env["CODEX_HOME"])
+			: path.join(os.homedir(), ".codex");
+		const authPath = path.join(codexHome, "auth.json");
+		const raw = JSON.parse(fs.readFileSync(authPath, "utf-8")) as Record<string, unknown>;
+		const tokens = raw["tokens"] as Record<string, unknown> | undefined;
+		return typeof tokens?.["access_token"] === "string" && (tokens["access_token"] as string).length > 0;
+	} catch {
+		return false;
+	}
+}
+
 /**
- * Auto-detect the best default model based on available API keys.
- * Priority: OpenAI/Codex OAuth → OpenAI API Key → Anthropic API Key
+ * Auto-detect the best default model based on available credentials.
+ * Priority: Codex OAuth (env or ~/.codex/auth.json) → OpenAI API Key → Anthropic API Key
  */
 function autoDetectModel(): string {
-	// Prefer OpenAI OAuth (Codex) if available
-	if (process.env["OPENAI_OAUTH_TOKEN"] || process.env["CODEX_OAUTH_TOKEN"]) {
-		return "openai/gpt-5.3-codex"; // Latest Codex agentic coding model
+	// Prefer Codex OAuth — uses chatgpt.com/backend-api endpoint
+	if (
+		process.env["OPENAI_OAUTH_TOKEN"] ||
+		process.env["CODEX_OAUTH_TOKEN"] ||
+		hasCodexAuthJson()
+	) {
+		return "openai-codex/gpt-5.3-codex";
 	}
 	// OpenAI API key
 	if (process.env["OPENAI_API_KEY"] || process.env["CODEX_API_KEY"]) {
