@@ -20,11 +20,16 @@ type SearchHit = {
 	snippet: string;
 };
 
+type PageData = {
+	hits: SearchHit[];
+	links: Array<{ text: string; href: string }>;
+};
+
 type PersonaReport = {
 	personaId: PersonaId;
 	personaName: string;
 	goal: string;
-	searchQueries: string[];
+	visitedUrls: string[];
 	hits: SearchHit[];
 	summary: string;
 	defender: {
@@ -39,16 +44,6 @@ function resolveDefenderMode(raw: unknown): DefenderMode {
 	const value = typeof raw === "string" ? raw.toLowerCase() : "";
 	if (value === "off" || value === "warn" || value === "block") return value;
 	return "block";
-}
-
-function buildPersonaQueries(goal: string, persona: Persona): string[] {
-	const motivation = persona.context.motivation;
-	const device = persona.demographics.device;
-	return [
-		`${goal} trends ${motivation}`,
-		`${goal} latest news ${persona.context.environment}`,
-		`${goal} recommended services for ${device}`,
-	];
 }
 
 function summarizeFromHitsFallback(persona: Persona, goal: string, hits: SearchHit[]): string {
@@ -94,45 +89,108 @@ async function ensurePlaywrightChromium(): Promise<{
 	return { browser };
 }
 
-async function scrapeUrl(browser: { newPage: () => Promise<any> }, targetUrl: string, goal: string): Promise<SearchHit[]> {
+async function scrapePage(browser: { newPage: () => Promise<any> }, targetUrl: string, goal: string): Promise<PageData> {
 	const page = await browser.newPage();
 	try {
 		await page.goto(targetUrl, { waitUntil: "domcontentloaded", timeout: 30_000 });
-		await page.waitForTimeout(1000);
-		const hits = (await page.evaluate((args: { url: string; goal: string }) => {
-			// Extract headings, paragraphs, and links as evidence
-			const out: Array<{ query: string; title: string; url: string; snippet: string }> = [];
-			const pageTitle = document.title || document.querySelector("h1")?.textContent || "";
+		await page.waitForTimeout(800);
+		return (await page.evaluate((args: { url: string; goal: string }) => {
+			const hits: Array<{ query: string; title: string; url: string; snippet: string }> = [];
+			const links: Array<{ text: string; href: string }> = [];
+			const pageTitle = (document.querySelector("h1")?.textContent ?? document.title ?? "").trim();
 
-			// Main content: headings + nearby text
-			const headings = Array.from(document.querySelectorAll("h1, h2, h3"));
-			for (const h of headings) {
+			// Content: headings + nearby text
+			for (const h of Array.from(document.querySelectorAll("h1, h2, h3"))) {
 				const title = (h.textContent ?? "").trim();
 				if (!title) continue;
-				// Grab following sibling text as snippet
-				const next = h.nextElementSibling;
-				const snippet = (next?.textContent ?? "").trim().slice(0, 200);
-				out.push({ query: args.goal, title, url: args.url, snippet });
-				if (out.length >= 9) break;
+				const snippet = ((h.nextElementSibling?.textContent ?? "")).trim().slice(0, 200);
+				hits.push({ query: args.goal, title, url: args.url, snippet });
+				if (hits.length >= 9) break;
 			}
-
-			// Fallback: grab paragraphs if no headings
-			if (out.length === 0) {
-				const paras = Array.from(document.querySelectorAll("p"));
-				for (const p of paras) {
+			if (hits.length === 0) {
+				for (const p of Array.from(document.querySelectorAll("p"))) {
 					const text = (p.textContent ?? "").trim();
 					if (text.length < 20) continue;
-					out.push({ query: args.goal, title: pageTitle, url: args.url, snippet: text.slice(0, 200) });
-					if (out.length >= 9) break;
+					hits.push({ query: args.goal, title: pageTitle, url: args.url, snippet: text.slice(0, 200) });
+					if (hits.length >= 9) break;
 				}
 			}
 
-			return out;
-		}, { url: targetUrl, goal })) as SearchHit[];
-		return hits;
+			// Links (absolute URLs only, deduplicated)
+			const seen = new Set<string>();
+			for (const a of Array.from(document.querySelectorAll("a[href]"))) {
+				const href = (a as HTMLAnchorElement).href;
+				const text = (a.textContent ?? "").trim().replace(/\s+/g, " ").slice(0, 80);
+				if (!href.startsWith("http") || !text || seen.has(href) || href === args.url) continue;
+				seen.add(href);
+				links.push({ text, href });
+				if (links.length >= 20) break;
+			}
+
+			return { hits, links };
+		}, { url: targetUrl, goal })) as PageData;
 	} finally {
 		await page.close();
 	}
+}
+
+async function chooseNextLink(
+	llmClient: { chat: (messages: any[], opts: any) => Promise<{ content: string }> },
+	persona: Persona,
+	goal: string,
+	currentUrl: string,
+	links: Array<{ text: string; href: string }>,
+	visited: string[],
+): Promise<string | null> {
+	const candidates = links.filter((l) => !visited.includes(l.href)).slice(0, 15);
+	if (candidates.length === 0) return null;
+
+	const linkList = candidates.map((l, i) => `${i + 1}. "${l.text}" → ${l.href}`).join("\n");
+	const prompt = [
+		`You are ${persona.name}. ${persona.context.motivation}`,
+		`Goal: ${goal}`,
+		`Current page: ${currentUrl}`,
+		"",
+		"Links available:",
+		linkList,
+		"",
+		`Which link number is most relevant to your goal? Reply ONLY with the number (e.g. "3") or "DONE" if no link is relevant.`,
+	].join("\n");
+
+	const result = await llmClient.chat([{ role: "user", content: prompt }], { maxTokens: 10 });
+	const text = result.content.trim();
+	if (text.toUpperCase().startsWith("DONE")) return null;
+	const idx = parseInt(text, 10) - 1;
+	return candidates[idx]?.href ?? null;
+}
+
+async function browseWithPersona(
+	browser: { newPage: () => Promise<any> },
+	llmClient: { chat: (messages: any[], opts: any) => Promise<{ content: string }> } | null,
+	startUrl: string,
+	goal: string,
+	persona: Persona,
+	maxSteps: number,
+): Promise<{ hits: SearchHit[]; visitedUrls: string[] }> {
+	let currentUrl = startUrl;
+	const visited: string[] = [];
+	const allHits: SearchHit[] = [];
+
+	for (let step = 0; step < maxSteps; step++) {
+		if (visited.includes(currentUrl)) break;
+		visited.push(currentUrl);
+
+		const { hits, links } = await scrapePage(browser, currentUrl, goal);
+		allHits.push(...hits);
+
+		if (!llmClient || step === maxSteps - 1 || links.length === 0) break;
+
+		const nextUrl = await chooseNextLink(llmClient, persona, goal, currentUrl, links, visited);
+		if (!nextUrl) break;
+		currentUrl = nextUrl;
+	}
+
+	return { hits: allHits, visitedUrls: visited };
 }
 
 export const feelfreeCommandDef = define({
@@ -169,13 +227,18 @@ export const feelfreeCommandDef = define({
 			description: "Output directory for persona workspaces and reports",
 			default: ".clawfooding/feelfree",
 		},
+		steps: {
+			type: "number",
+			description: "Max pages to visit per persona when browsing (default: 3)",
+			default: 3,
+		},
 		defender_mode: {
 			type: "string",
 			description: "Defender mode override: block|warn|off (default: block)",
 		},
 	},
 	run: async (ctx) => {
-		const { url, goal, personas, model, simulate, output, json, defender_mode } = ctx.values;
+		const { url, goal, personas, model, simulate, output, json, steps, defender_mode } = ctx.values;
 		const personaNames = String(personas)
 			.split(",")
 			.map((x) => x.trim())
@@ -217,22 +280,30 @@ export const feelfreeCommandDef = define({
 					memory = await fs.readFile(memoryPath, "utf-8");
 				} catch {}
 
-				const queries = buildPersonaQueries(goal, persona);
+				const maxSteps = typeof steps === "number" && steps > 0 ? steps : 3;
 				let hits: SearchHit[] = [];
+				let visitedUrls: string[] = [];
+
 				if (simulate || !browserWrap) {
-					hits = queries.flatMap((q, idx) => [
-						{
-							query: q,
-							title: `[mock] trend sample ${idx + 1}`,
-							url: `${url}/mock/trend-${idx + 1}`,
-							snippet: "mock snippet",
-						},
-					]);
+					visitedUrls = [String(url)];
+					hits = [1, 2, 3].map((i) => ({
+						query: String(goal),
+						title: `[mock] trend sample ${i}`,
+						url: `${url}/mock/trend-${i}`,
+						snippet: "mock snippet",
+					}));
 				} else {
-					hits = await scrapeUrl(browserWrap.browser, String(url), String(goal));
+					({ hits, visitedUrls } = await browseWithPersona(
+						browserWrap.browser,
+						llmClient,
+						String(url),
+						String(goal),
+						persona,
+						maxSteps,
+					));
 				}
 
-				let summary = summarizeFromHitsFallback(persona, goal, hits);
+				let summary = summarizeFromHitsFallback(persona, String(goal), hits);
 				if (llmClient) {
 					const systemPrompt = [
 						buildAgentSystemPrompt(persona),
@@ -247,10 +318,11 @@ export const feelfreeCommandDef = define({
 					].join("\n");
 
 					const userPrompt = [
-						`Target URL: ${url}`,
+						`Starting URL: ${url}`,
 						`Goal: ${goal}`,
+						`Pages visited (${visitedUrls.length}): ${visitedUrls.join(" → ")}`,
 						"",
-						"Evidence (page content extracted from the URL):",
+						"Evidence (content from all visited pages):",
 						JSON.stringify(hits, null, 2),
 						"",
 						"Create a persona-specific report with:",
@@ -277,7 +349,7 @@ export const feelfreeCommandDef = define({
 				const memoryEntry = [
 					`# ${new Date().toISOString()}`,
 					`goal: ${goal}`,
-					`queries: ${queries.join(" | ")}`,
+					`visited: ${visitedUrls.join(" → ")}`,
 					`hits: ${hits.length}`,
 					`summary_head: ${safeSummary.slice(0, 220).replace(/\s+/g, " ")}`,
 					"",
@@ -287,8 +359,8 @@ export const feelfreeCommandDef = define({
 				const report: PersonaReport = {
 					personaId,
 					personaName: persona.name,
-					goal,
-					searchQueries: queries,
+					goal: String(goal),
+					visitedUrls,
 					hits,
 					summary: safeSummary,
 					defender: {
@@ -332,4 +404,3 @@ export const feelfreeCommandDef = define({
 		}
 	},
 });
-
