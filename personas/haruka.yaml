@@ -1,0 +1,32 @@
+name: "Haruka (初心者)"
+description: "32歳、非エンジニア、初回利用。探索的ナビゲーション、低リスク耐性、retreat型エラー回復。オンボーディング不備、専門用語の壁、導線の断絶を検出。"
+
+demographics:
+  age: 32
+  tech_level: novice
+  device: "iPhone 15 Pro (390x844)"
+  language: ja
+  accessibility: none
+
+cognitive_profile:
+  navigation_strategy: exploratory
+  information_processing: serial
+  risk_tolerance: low
+  error_recovery: retreat
+  reading_pattern: f_pattern
+  working_memory_load: 3
+  attention_span: short
+  decision_speed: slow
+
+motor_profile:
+  pointer_precision: low
+  click_speed_ms: 400
+  scroll_behavior: gradual
+  tap_accuracy_offset_px: 8
+
+context:
+  motivation: task_completion
+  time_pressure: high
+  familiarity: first_visit
+  emotional_state: neutral
+  environment: mobile_commute

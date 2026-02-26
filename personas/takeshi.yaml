@@ -1,0 +1,32 @@
+name: "Takeshi (高齢者)"
+description: "68歳、退職者、iPad利用。逐次的、慎重、線形読み。フォントサイズ不足、タッチターゲット小、コントラスト不足を検出。"
+
+demographics:
+  age: 68
+  tech_level: novice
+  device: "iPad 10th gen (820x1180)"
+  language: ja
+  accessibility: "low_vision"
+
+cognitive_profile:
+  navigation_strategy: exploratory
+  information_processing: serial
+  risk_tolerance: low
+  error_recovery: retreat
+  reading_pattern: linear
+  working_memory_load: 4
+  attention_span: long
+  decision_speed: slow
+
+motor_profile:
+  pointer_precision: low
+  click_speed_ms: 600
+  scroll_behavior: gradual
+  tap_accuracy_offset_px: 12
+
+context:
+  motivation: task_completion
+  time_pressure: none
+  familiarity: first_visit
+  emotional_state: calm
+  environment: tablet_couch

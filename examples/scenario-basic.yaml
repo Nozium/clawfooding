@@ -1,0 +1,62 @@
+name: "Basic Login Flow Test"
+description: "Test login and dashboard navigation with cognitive personas"
+target_url: "https://staging.example.com"
+
+personas:
+  - haruka
+  - kenji
+  - yuki
+
+auth:
+  method: test_account
+  credentials:
+    email: "test@example.com"
+    password: "test-password-123"
+
+permissions:
+  navigation: allow
+  click: allow
+  type: allow
+  submit: allow
+  delete: deny
+  download: deny
+  external_navigation: deny
+  max_requests_per_minute: 30
+  max_session_duration: 600
+  url_allowlist:
+    - "https://staging.example.com/**"
+  url_denylist:
+    - "*/admin/**"
+    - "*/billing/**"
+
+recovery:
+  enabled: true
+  max_level: 3
+  max_retries_per_step: 3
+  ai_summary:
+    model: "anthropic/claude-haiku-4-5"
+    prompt_template: default
+
+steps:
+  - action: navigate
+    description: "Navigate to login page"
+    expected: "Login form is visible"
+  - action: type
+    description: "Enter email address"
+    expected: "Email field is filled"
+  - action: type
+    description: "Enter password"
+    expected: "Password field is filled"
+  - action: submit
+    description: "Click login button"
+    expected: "Dashboard is displayed"
+  - action: scan
+    description: "Scan dashboard elements"
+    expected: "Key metrics are visible"
+  - action: interact
+    description: "Click on primary CTA"
+    expected: "Detail view is displayed"
+
+cleanup:
+  - action: logout
+  - action: clear_test_data

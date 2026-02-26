@@ -1,0 +1,51 @@
+{
+	"name": "clawfooding",
+	"version": "0.1.0",
+	"description": "AI cognitive pattern testing CLI - per-persona billing tracking and cognitive simulation",
+	"type": "module",
+	"bin": {
+		"clawfooding": "./src/index.ts"
+	},
+	"exports": {
+		".": {
+			"types": "./src/index.ts",
+			"default": "./src/index.ts"
+		}
+	},
+	"publishConfig": {
+		"bin": {
+			"clawfooding": "./dist/index.js"
+		},
+		"exports": {
+			".": {
+				"types": "./dist/index.d.ts",
+				"default": "./dist/index.js"
+			}
+		}
+	},
+	"scripts": {
+		"start": "bun ./src/index.ts",
+		"build": "tsdown",
+		"prepack": "pnpm run build",
+		"test": "vitest run",
+		"typecheck": "tsc --noEmit",
+		"clean": "rm -rf dist"
+	},
+	"devDependencies": {
+		"@anthropic-ai/sdk": "catalog:runtime",
+		"@clawfooding/core": "workspace:*",
+		"@clawfooding/terminal": "workspace:*",
+		"@types/node": "catalog:types",
+		"gunshi": "catalog:runtime",
+		"openai": "catalog:runtime",
+		"picocolors": "catalog:runtime",
+		"tsdown": "catalog:build",
+		"typescript": "catalog:build",
+		"valibot": "catalog:runtime",
+		"vitest": "catalog:testing",
+		"yaml": "catalog:runtime"
+	},
+	"optionalDependencies": {
+		"playwright": "1.57.0"
+	}
+}

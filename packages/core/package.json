@@ -1,0 +1,56 @@
+{
+	"name": "@clawfooding/core",
+	"version": "0.1.0",
+	"private": true,
+	"type": "module",
+	"exports": {
+		"./persona": {
+			"types": "./src/persona.ts",
+			"default": "./src/persona.ts"
+		},
+		"./cognitive": {
+			"types": "./src/cognitive.ts",
+			"default": "./src/cognitive.ts"
+		},
+		"./security": {
+			"types": "./src/security.ts",
+			"default": "./src/security.ts"
+		},
+		"./billing": {
+			"types": "./src/billing.ts",
+			"default": "./src/billing.ts"
+		},
+		"./types": {
+			"types": "./src/_types.ts",
+			"default": "./src/_types.ts"
+		},
+		"./prompts": {
+			"types": "./src/prompts/index.ts",
+			"default": "./src/prompts/index.ts"
+		},
+		"./llm": {
+			"types": "./src/llm.ts",
+			"default": "./src/llm.ts"
+		},
+		"./defender": {
+			"types": "./src/defender.ts",
+			"default": "./src/defender.ts"
+		}
+	},
+	"scripts": {
+		"test": "vitest run",
+		"typecheck": "tsc --noEmit"
+	},
+	"devDependencies": {
+		"@anthropic-ai/sdk": "catalog:runtime",
+		"@types/node": "catalog:types",
+		"openai": "catalog:runtime",
+		"typescript": "catalog:build",
+		"valibot": "catalog:runtime",
+		"vitest": "catalog:testing",
+		"yaml": "catalog:runtime"
+	},
+	"dependencies": {
+		"openclaw-defender": "^0.3.0"
+	}
+}
